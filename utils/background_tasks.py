@@ -15,7 +15,7 @@ def run_scheduled_compare():
     while keep_running:
         try:
             print(f"Running comparison at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-            process_directory(config.INPUT_DIR, config.OUTPUT_JSON)
+            process_directory(config.INPUT_DIR)
             print(f"Comparison completed successfully")
         except Exception as e:
             print(f"Error during comparison process: {str(e)}")

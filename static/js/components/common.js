@@ -226,6 +226,9 @@ function loadViewData(view) {
     case "users":
       loadUsersData();
       break;
+    case "deltas":
+      loadDeltaData();
+      break;
   }
 }
 

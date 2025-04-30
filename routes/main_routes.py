@@ -8,7 +8,7 @@ main_bp = Blueprint('main', __name__)
 @main_bp.route('/<view>')
 def index(view=None):
     """Render the main dashboard with the specified view"""
-    if view and view in ['overview', 'deliveries', 'customers', 'shipments', 'users']:
+    if view and view in ['overview', 'deliveries', 'customers', 'shipments', 'users', 'deltas']:
         return render_template('base.html', active_view=view)
     return render_template('index.html')
 

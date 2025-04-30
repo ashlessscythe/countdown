@@ -8,7 +8,7 @@ misc_bp = Blueprint('misc', __name__)
 def run_compare():
     """API endpoint to manually trigger a comparison"""
     try:
-        process_directory(config.INPUT_DIR, config.OUTPUT_JSON)
+        process_directory(config.INPUT_DIR)
         return jsonify({"status": "success", "message": "Comparison completed successfully"})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})

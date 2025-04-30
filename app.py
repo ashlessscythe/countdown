@@ -8,6 +8,7 @@ from routes.status_routes import status_bp
 from routes.entity_routes import entity_bp
 from routes.filter_routes import filter_bp
 from routes.misc_routes import misc_bp
+from routes.delta_routes import delta_bp
 
 app = Flask(__name__)
 
@@ -17,6 +18,7 @@ app.register_blueprint(status_bp)
 app.register_blueprint(entity_bp)
 app.register_blueprint(filter_bp)
 app.register_blueprint(misc_bp)
+app.register_blueprint(delta_bp)
 
 if __name__ == '__main__':
     # Create the templates and static directories if they don't exist
