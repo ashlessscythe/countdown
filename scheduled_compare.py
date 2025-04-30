@@ -25,7 +25,7 @@ def run_comparison():
     """Run the comparison process and log the results"""
     try:
         logger.info(f"Starting comparison process at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        process_directory(config.INPUT_DIR, config.OUTPUT_JSON)
+        process_directory(config.INPUT_DIR)
         logger.info(f"Comparison completed successfully")
     except Exception as e:
         logger.error(f"Error during comparison process: {str(e)}")

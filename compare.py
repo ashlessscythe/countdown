@@ -4,8 +4,34 @@ import json
 import re
 from datetime import datetime, timezone
 import config
+import shutil
+import time
+
+def ensure_directory_exists(directory):
+    """Ensure that a directory exists, creating it if necessary"""
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+        print(f"Created directory: {directory}")
+
+def setup_directory_structure():
+    """Set up the directory structure for snapshots and changes"""
+    # Create base directories if they don't exist
+    data_dir = os.path.join(config.BASE_DIR, "data")
+    snapshots_dir = os.path.join(data_dir, "snapshots")
+    changes_dir = os.path.join(data_dir, "changes")
+    
+    ensure_directory_exists(data_dir)
+    ensure_directory_exists(snapshots_dir)
+    ensure_directory_exists(changes_dir)
+    
+    return {
+        "data_dir": data_dir,
+        "snapshots_dir": snapshots_dir,
+        "changes_dir": changes_dir
+    }
 
 def get_sorted_files_by_type(directory):
+    """Get files sorted by timestamp and categorized by type"""
     files = os.listdir(directory)
     categorized = {}
     
@@ -37,213 +63,28 @@ def sanitize_dataframe(df):
     column_mapping = {col: to_snake_case(col) for col in df.columns}
     return df.rename(columns=column_mapping), column_mapping
 
-def compare_excel_files(path1, path2):
-    print(f"Reading files:\n  - {path1}\n  - {path2}")
+def generate_timestamp_filename(extension="json", source_file=None):
+    """Generate a filename with the current timestamp"""
+    # Use microseconds to ensure uniqueness
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     
-    df1 = pd.read_excel(path1, dtype=str)
-    df2 = pd.read_excel(path2, dtype=str)
+    # If source file is provided, extract its timestamp and use it
+    if source_file:
+        try:
+            source_timestamp = os.path.basename(source_file).split('_')[0]
+            if len(source_timestamp) >= 14:  # Ensure it's a valid timestamp
+                timestamp = f"{source_timestamp[:8]}-{source_timestamp[8:10]}{source_timestamp[10:12]}{source_timestamp[12:14]}"
+        except (IndexError, ValueError):
+            # If there's an error extracting the timestamp, use the current time
+            pass
+    
+    # Add a random suffix to ensure uniqueness
+    suffix = str(int(time.time() * 1000) % 1000)
+    return f"{timestamp}_{suffix}.{extension}"
 
-    print(f"Original columns in file 1: {list(df1.columns)}")
-    print(f"Original columns in file 2: {list(df2.columns)}")
-
-    # Sanitize column names
-    df1, mapping1 = sanitize_dataframe(df1)
-    df2, mapping2 = sanitize_dataframe(df2)
-    
-    print(f"Sanitized columns in file 1: {list(df1.columns)}")
-    print(f"Sanitized columns in file 2: {list(df2.columns)}")
-    
-    df1.fillna("", inplace=True)
-    df2.fillna("", inplace=True)
-    
-    # Apply warehouse filter if configured
-    warehouse_col = "warehouse_number"
-    if hasattr(config, 'FILTER_WHSE') and config.FILTER_WHSE:
-        filter_whse = config.FILTER_WHSE
-        
-        # Apply filter to first dataframe if column exists
-        if warehouse_col in df1.columns:
-            print(f"Applying warehouse filter to first file: {filter_whse}")
-            df1 = df1[df1[warehouse_col] == filter_whse]
-            print(f"After filtering first file: {len(df1)} rows")
-            
-        # Apply filter to second dataframe if column exists
-        if warehouse_col in df2.columns:
-            print(f"Applying warehouse filter to second file: {filter_whse}")
-            df2 = df2[df2[warehouse_col] == filter_whse]
-            print(f"After filtering second file: {len(df2)} rows")
-
-    # Define the key columns we need for comparison
-    key_col = "serial"        # "Serial #" becomes "serial"
-    status_col = "status"     # "Status" becomes "status"
-    
-    # Additional columns to include in the output
-    additional_cols = [
-        "delivery",           # "Delivery" becomes "delivery"
-        "customer_name",      # "Customer Name" becomes "customer_name"
-        "shipment_number",    # "Shipment" becomes "shipment" (if available)
-        "created_by"          # "Created by" becomes "created_by" (if available)
-    ]
-    
-    # Check if the required columns exist
-    if key_col not in df1.columns:
-        raise KeyError(f"Could not find '{key_col}' column in first file. Available columns: {list(df1.columns)}")
-    if status_col not in df1.columns:
-        raise KeyError(f"Could not find '{status_col}' column in first file. Available columns: {list(df1.columns)}")
-    if key_col not in df2.columns:
-        raise KeyError(f"Could not find '{key_col}' column in second file. Available columns: {list(df2.columns)}")
-    if status_col not in df2.columns:
-        raise KeyError(f"Could not find '{status_col}' column in second file. Available columns: {list(df2.columns)}")
-
-    # Create lists of columns to select from each dataframe
-    cols1 = [key_col, status_col] + [col for col in additional_cols if col in df1.columns]
-    cols2 = [key_col, status_col] + [col for col in additional_cols if col in df2.columns]
-    
-    # Merge dataframes on the key column
-    merged = df1[cols1].merge(
-        df2[cols2], on=key_col, how="outer", suffixes=("_old", "_new"), indicator=True
-    )
-
-    changes = []
-    # Track serials that have already been processed to avoid duplicates
-    processed_serials = set()
-    
-    for _, row in merged.iterrows():
-        serial = row[key_col]
-        old_status = "" if pd.isna(row.get(f"{status_col}_old", "")) else row.get(f"{status_col}_old", "")
-        new_status = "" if pd.isna(row.get(f"{status_col}_new", "")) else row.get(f"{status_col}_new", "")
-        change_type = row["_merge"]
-        
-        # Get the current status
-        current_status = ""
-        if change_type == "both":
-            current_status = new_status
-            # Only record a change if the status actually changed
-            if old_status == new_status:
-                # Skip recording changes where status didn't change
-                # This helps reduce false positives
-                continue
-        elif change_type == "right_only":
-            current_status = new_status
-        elif change_type == "left_only":
-            # For items that disappeared, mark them as "SHP" (shipped) only if they were ASH before
-            if old_status == "ASH":
-                current_status = "SHP"
-            else:
-                current_status = old_status
-        
-        # Skip if this serial has already reached SHP status
-        # This helps prevent duplicate entries for serials that have already been shipped
-        if serial in processed_serials:
-            continue
-        
-        # If the serial has reached SHP status, mark it as processed
-        if current_status == "SHP":
-            processed_serials.add(serial)
-        
-        change = {
-            "serial": serial,
-            "from": old_status,
-            "to": current_status,
-            "change_type": change_type,
-            "timestamp": datetime.now(timezone.utc).isoformat()  # Add timestamp to each change
-        }
-        
-        # Add additional fields from the newer file (if available)
-        for col in additional_cols:
-            new_col = f"{col}_new" if f"{col}_new" in row.index else None
-            old_col = f"{col}_old" if f"{col}_old" in row.index else None
-            
-            # Try to get value from new file first, then old file if not available
-            value = ""
-            if new_col and not pd.isna(row.get(new_col, "")):
-                value = row[new_col]
-            elif old_col and not pd.isna(row.get(old_col, "")):
-                value = row[old_col]
-            
-            change[col] = value
-        
-        changes.append(change)
-    return changes
-
-def calculate_changes_statistics(changes):
-    """Calculate summary statistics from the changes data"""
-    # Count by status
-    status_counts = {}
-    for change in changes:
-        status = change.get('to', '')
-        if status:
-            status_counts[status] = status_counts.get(status, 0) + 1
-    
-    # Count by customer
-    customer_stats = {}
-    for change in changes:
-        customer = change.get('customer_name', 'Unknown')
-        if customer not in customer_stats:
-            customer_stats[customer] = {
-                'serial_count': 0,
-                'change_count': 0
-            }
-        customer_stats[customer]['serial_count'] += 1
-        customer_stats[customer]['change_count'] += 1
-    
-    # Count by delivery
-    delivery_stats = {}
-    for change in changes:
-        delivery = change.get('delivery', 'Unknown')
-        if delivery not in delivery_stats:
-            delivery_stats[delivery] = {
-                'serial_count': 0,
-                'customer': change.get('customer_name', 'Unknown')
-            }
-        delivery_stats[delivery]['serial_count'] += 1
-    
-    # Count by shipment
-    shipment_stats = {}
-    for change in changes:
-        shipment = change.get('shipment_number', '')
-        if shipment:
-            if shipment not in shipment_stats:
-                shipment_stats[shipment] = {
-                    'serial_count': 0,
-                    'customer': change.get('customer_name', 'Unknown')
-                }
-            shipment_stats[shipment]['serial_count'] += 1
-    
-    # Count by user
-    user_stats = {}
-    for change in changes:
-        user = change.get('created_by', 'Unknown')
-        if user not in user_stats:
-            user_stats[user] = {
-                'serial_count': 0,
-                'change_count': 0
-            }
-        user_stats[user]['serial_count'] += 1
-        user_stats[user]['change_count'] += 1
-    
-    # Count by change type
-    change_type_counts = {}
-    for change in changes:
-        change_type = change.get('change_type', 'Unknown')
-        change_type_counts[change_type] = change_type_counts.get(change_type, 0) + 1
-    
-    return {
-        'status_distribution': status_counts,
-        'customer_stats': customer_stats,
-        'delivery_stats': delivery_stats,
-        'shipment_stats': shipment_stats,
-        'user_stats': user_stats,
-        'change_type_counts': change_type_counts,
-        'total_customers': len(customer_stats),
-        'total_deliveries': len(delivery_stats),
-        'total_shipments': len(shipment_stats),
-        'total_users': len(user_stats)
-    }
-
-def calculate_full_dataset_statistics(excel_path):
-    """Calculate summary statistics from the entire dataset"""
-    print(f"Calculating full dataset statistics from: {excel_path}")
+def excel_to_snapshot(excel_path, output_dir):
+    """Convert an Excel file to a JSON snapshot and save it in the snapshots directory"""
+    print(f"Converting Excel to snapshot: {excel_path}")
     
     # Read the Excel file
     df = pd.read_excel(excel_path, dtype=str)
@@ -262,215 +103,422 @@ def calculate_full_dataset_statistics(excel_path):
         df = df[df[warehouse_col] == filter_whse]
         print(f"After filtering: {len(df)} rows")
     
-    # Total number of rows
-    total_rows = len(df)
-    
-    # Count by status
+    # Filter by Status in ['ASH', 'SHP'] as suggested
     status_col = "status"
     if status_col in df.columns:
-        status_counts = df[status_col].value_counts().to_dict()
-    else:
-        status_counts = {}
+        df = df[df[status_col].str.upper().isin(['ASH', 'SHP'])]
+        print(f"After status filtering: {len(df)} rows")
+    
+    # Define the key columns we need
+    key_col = "serial"
+    status_col = "status"
+    
+    # Additional columns to include in the output
+    additional_cols = [
+        "delivery",
+        "customer_name",
+        "shipment_number",
+        "created_by",
+        "time",
+        "scan_time",
+        "timestamp",
+        "scan_timestamp",
+        "created_at",
+        "updated_at"
+    ]
+    
+    # Select only the columns that exist in the dataframe
+    cols = [col for col in [key_col, status_col] + additional_cols if col in df.columns]
+    
+    # Create a list of records
+    records = []
+    snapshot_time = datetime.now(timezone.utc).isoformat()
+    
+    for _, row in df[cols].iterrows():
+        record = row.to_dict()
+        # Add snapshot_time to each record
+        record["snapshot_time"] = snapshot_time
+        records.append(record)
+    
+    # Generate a filename with timestamp based on the source file
+    filename = generate_timestamp_filename(extension="json", source_file=excel_path)
+    output_path = os.path.join(output_dir, filename)
+    
+    # Save the snapshot as JSON
+    with open(output_path, 'w') as f:
+        json.dump({
+            "metadata": {
+                "source_file": os.path.basename(excel_path),
+                "created_at": snapshot_time,
+                "record_count": len(records)
+            },
+            "records": records
+        }, f, indent=2)
+    
+    print(f"Snapshot saved to: {output_path}")
+    return output_path
+
+def get_latest_snapshots(snapshots_dir, count=2):
+    """Get the latest snapshot files from the snapshots directory"""
+    if not os.path.exists(snapshots_dir):
+        return []
+    
+    files = [f for f in os.listdir(snapshots_dir) if f.endswith('.json')]
+    
+    # Sort files by modification time (newest first)
+    files.sort(key=lambda f: os.path.getmtime(os.path.join(snapshots_dir, f)), reverse=True)
+    
+    # Return the latest 'count' files
+    return [os.path.join(snapshots_dir, f) for f in files[:count]]
+
+def compare_snapshots(snapshot1_path, snapshot2_path, output_dir):
+    """Compare two snapshots and save the delta to the changes directory"""
+    print(f"Comparing snapshots:\n  - {snapshot1_path}\n  - {snapshot2_path}")
+    
+    # Load the snapshots
+    with open(snapshot1_path, 'r') as f:
+        snapshot1 = json.load(f)
+    
+    with open(snapshot2_path, 'r') as f:
+        snapshot2 = json.load(f)
+    
+    # Extract records
+    records1 = {record["serial"]: record for record in snapshot1["records"] if "serial" in record}
+    records2 = {record["serial"]: record for record in snapshot2["records"] if "serial" in record}
+    
+    # Find serials in each snapshot
+    serials1 = set(records1.keys())
+    serials2 = set(records2.keys())
+    
+    # Calculate differences
+    added_serials = serials2 - serials1
+    removed_serials = serials1 - serials2
+    common_serials = serials1.intersection(serials2)
+    
+    # Initialize changes lists
+    added = []
+    removed = []
+    updated = []
+    
+    # Process added serials
+    for serial in added_serials:
+        added.append({
+            "serial": serial,
+            "record": records2[serial],
+            "change_type": "added"
+        })
+    
+    # Process removed serials
+    for serial in removed_serials:
+        removed.append({
+            "serial": serial,
+            "record": records1[serial],
+            "change_type": "removed"
+        })
+    
+    # Process updated serials
+    for serial in common_serials:
+        record1 = records1[serial]
+        record2 = records2[serial]
+        
+        # Check if any fields have changed
+        changes = {}
+        for key in set(record1.keys()).union(record2.keys()):
+            if key in record1 and key in record2 and record1[key] != record2[key]:
+                changes[key] = {
+                    "from": record1[key],
+                    "to": record2[key]
+                }
+        
+        if changes:
+            updated.append({
+                "serial": serial,
+                "changes": changes,
+                "record": record2,
+                "change_type": "updated"
+            })
+    
+    # Create delta object
+    delta = {
+        "metadata": {
+            "snapshot1": os.path.basename(snapshot1_path),
+            "snapshot2": os.path.basename(snapshot2_path),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "added_count": len(added),
+            "removed_count": len(removed),
+            "updated_count": len(updated)
+        },
+        "added": added,
+        "removed": removed,
+        "updated": updated
+    }
+    
+    # Generate a filename with timestamp
+    snapshot2_basename = os.path.basename(snapshot2_path)
+    snapshot2_timestamp = snapshot2_basename.split('.')[0].split('_')[0]  # Extract timestamp part
+    filename = f"{snapshot2_timestamp}_delta.json"
+    output_path = os.path.join(output_dir, filename)
+    
+    # Save the delta as JSON
+    with open(output_path, 'w') as f:
+        json.dump(delta, f, indent=2)
+    
+    print(f"Delta saved to: {output_path}")
+    return delta, output_path
+
+def append_to_master_history(delta, master_history_path):
+    """Append delta to the master history file"""
+    print(f"Appending to master history: {master_history_path}")
+    
+    # Initialize history data
+    history = {
+        "metadata": {
+            "last_updated": datetime.now(timezone.utc).isoformat(),
+            "delta_count": 0,
+            "total_changes": 0
+        },
+        "deltas": []
+    }
+    
+    # Load existing history if it exists
+    if os.path.exists(master_history_path):
+        try:
+            with open(master_history_path, 'r') as f:
+                history = json.load(f)
+        except Exception as e:
+            print(f"Error loading master history: {str(e)}")
+            # Continue with a new history file
+    
+    # Add the new delta
+    history["deltas"].append(delta)
+    
+    # Update metadata
+    history["metadata"]["last_updated"] = datetime.now(timezone.utc).isoformat()
+    history["metadata"]["delta_count"] = len(history["deltas"])
+    history["metadata"]["total_changes"] = sum([
+        d["metadata"]["added_count"] + 
+        d["metadata"]["removed_count"] + 
+        d["metadata"]["updated_count"] 
+        for d in history["deltas"]
+    ])
+    
+    # Save the updated history
+    with open(master_history_path, 'w') as f:
+        json.dump(history, f, indent=2)
+    
+    print(f"Master history updated: {master_history_path}")
+    return history
+
+def generate_current_status(delta, current_status_path):
+    """Generate a current status file based on the latest delta"""
+    print(f"Generating current status: {current_status_path}")
+    
+    # Initialize current status
+    current_status = {
+        "metadata": {
+            "last_updated": datetime.now(timezone.utc).isoformat(),
+            "record_count": 0
+        },
+        "records": {}
+    }
+    
+    # Load existing current status if it exists
+    if os.path.exists(current_status_path):
+        try:
+            with open(current_status_path, 'r') as f:
+                current_status = json.load(f)
+        except Exception as e:
+            print(f"Error loading current status: {str(e)}")
+            # Continue with a new current status file
+    
+    # Update with added records
+    for item in delta["added"]:
+        serial = item["serial"]
+        current_status["records"][serial] = item["record"]
+    
+    # Update with updated records
+    for item in delta["updated"]:
+        serial = item["serial"]
+        current_status["records"][serial] = item["record"]
+    
+    # Remove removed records
+    for item in delta["removed"]:
+        serial = item["serial"]
+        if serial in current_status["records"]:
+            del current_status["records"][serial]
+    
+    # Update metadata
+    current_status["metadata"]["last_updated"] = datetime.now(timezone.utc).isoformat()
+    current_status["metadata"]["record_count"] = len(current_status["records"])
+    
+    # Save the updated current status
+    with open(current_status_path, 'w') as f:
+        json.dump(current_status, f, indent=2)
+    
+    print(f"Current status updated: {current_status_path}")
+    return current_status
+
+def calculate_statistics(current_status):
+    """Calculate statistics from the current status"""
+    records = list(current_status["records"].values())
+    
+    # Count by status
+    status_counts = {}
+    for record in records:
+        status = record.get('status', '').upper()
+        if status:
+            status_counts[status] = status_counts.get(status, 0) + 1
     
     # Count by customer
-    customer_col = "customer_name"
     customer_stats = {}
-    if customer_col in df.columns:
-        for customer, group in df.groupby(customer_col):
-            if not customer:
-                customer = "Unknown"
+    for record in records:
+        customer = record.get('customer_name', 'Unknown')
+        if customer not in customer_stats:
             customer_stats[customer] = {
-                'serial_count': len(group),
-                'total_count': len(group)
+                'serial_count': 0,
+                'ash_count': 0,
+                'shp_count': 0
             }
+        
+        customer_stats[customer]['serial_count'] += 1
+        
+        status = record.get('status', '').upper()
+        if status == 'ASH':
+            customer_stats[customer]['ash_count'] += 1
+        elif status == 'SHP':
+            customer_stats[customer]['shp_count'] += 1
     
     # Count by delivery
-    delivery_col = "delivery"
     delivery_stats = {}
-    if delivery_col in df.columns and customer_col in df.columns:
-        for delivery, group in df.groupby(delivery_col):
-            if not delivery:
-                delivery = "Unknown"
-            # Get the most common customer for this delivery
-            customer = "Unknown"
-            if len(group) > 0 and customer_col in group.columns:
-                customer_counts = group[customer_col].value_counts()
-                if len(customer_counts) > 0:
-                    customer = customer_counts.index[0]
-                    if not customer:
-                        customer = "Unknown"
-            
+    for record in records:
+        delivery = record.get('delivery', 'Unknown')
+        if delivery not in delivery_stats:
             delivery_stats[delivery] = {
-                'serial_count': len(group),
-                'customer': customer
+                'serial_count': 0,
+                'customer': record.get('customer_name', 'Unknown'),
+                'ash_count': 0,
+                'shp_count': 0
             }
-    
-    # Count by shipment
-    shipment_col = "shipment_number"
-    shipment_stats = {}
-    if shipment_col in df.columns and customer_col in df.columns:
-        # Filter out empty shipment numbers
-        shipment_df = df[df[shipment_col] != ""]
-        for shipment, group in shipment_df.groupby(shipment_col):
-            if not shipment:
-                continue
-            
-            # Get the most common customer for this shipment
-            customer = "Unknown"
-            if len(group) > 0 and customer_col in group.columns:
-                customer_counts = group[customer_col].value_counts()
-                if len(customer_counts) > 0:
-                    customer = customer_counts.index[0]
-                    if not customer:
-                        customer = "Unknown"
-            
-            shipment_stats[shipment] = {
-                'serial_count': len(group),
-                'customer': customer
-            }
+        
+        delivery_stats[delivery]['serial_count'] += 1
+        
+        status = record.get('status', '').upper()
+        if status == 'ASH':
+            delivery_stats[delivery]['ash_count'] += 1
+        elif status == 'SHP':
+            delivery_stats[delivery]['shp_count'] += 1
     
     # Count by user
-    user_col = "created_by"
     user_stats = {}
-    if user_col in df.columns:
-        for user, group in df.groupby(user_col):
-            if not user:
-                user = "Unknown"
+    for record in records:
+        user = record.get('created_by', 'Unknown')
+        if user not in user_stats:
             user_stats[user] = {
-                'serial_count': len(group),
-                'total_count': len(group)
+                'serial_count': 0,
+                'ash_count': 0,
+                'shp_count': 0
             }
+        
+        user_stats[user]['serial_count'] += 1
+        
+        status = record.get('status', '').upper()
+        if status == 'ASH':
+            user_stats[user]['ash_count'] += 1
+        elif status == 'SHP':
+            user_stats[user]['shp_count'] += 1
     
     return {
-        'total_rows': total_rows,
         'status_distribution': status_counts,
         'customer_stats': customer_stats,
         'delivery_stats': delivery_stats,
-        'shipment_stats': shipment_stats,
         'user_stats': user_stats,
         'total_customers': len(customer_stats),
         'total_deliveries': len(delivery_stats),
-        'total_shipments': len(shipment_stats),
-        'total_users': len(user_stats)
+        'total_users': len(user_stats),
+        'total_records': len(records)
     }
 
-def process_directory(directory, output_json_path):
-    print(f"Processing directory: {directory}")
-    if not os.path.exists(directory):
-        print(f"Error: Directory '{directory}' does not exist")
+def process_directory(input_dir):
+    """Process the input directory and generate snapshots, deltas, and statistics"""
+    print(f"Processing directory: {input_dir}")
+    if not os.path.exists(input_dir):
+        print(f"Error: Directory '{input_dir}' does not exist")
         return
-        
-    files = os.listdir(directory)
-    print(f"Found {len(files)} files in directory")
     
-    data = {}
-    categorized = get_sorted_files_by_type(directory)
+    # Set up directory structure
+    dirs = setup_directory_structure()
+    data_dir = dirs["data_dir"]
+    snapshots_dir = dirs["snapshots_dir"]
+    changes_dir = dirs["changes_dir"]
+    
+    # Define paths for master history and current status
+    master_history_path = os.path.join(data_dir, "master_history.json")
+    current_status_path = os.path.join(data_dir, "current_status.json")
+    
+    # Get categorized files
+    categorized = get_sorted_files_by_type(input_dir)
     print(f"Categorized files: {categorized}")
-
-    all_changes = []
     
+    # Process each file type
     for file_type, entries in categorized.items():
-        if len(entries) < 2:
-            print(f"Skipping {file_type} - need at least 2 files to compare")
+        if not entries:
+            print(f"No files found for type '{file_type}'")
             continue
-        newest_file = os.path.join(directory, entries[0][1])
-        previous_file = os.path.join(directory, entries[1][1])
         
-        print(f"\nComparing files for type '{file_type}':")
-        print(f"  Latest: {entries[0][1]}")
-        print(f"  Previous: {entries[1][1]}")
-
-        try:
-            changes = compare_excel_files(previous_file, newest_file)
-            all_changes.extend(changes)
-            
-            # Calculate statistics for changes in this file type
-            changes_stats = calculate_changes_statistics(changes)
-            
-            # Calculate statistics for the entire dataset in the newest file
-            full_stats = calculate_full_dataset_statistics(newest_file)
-            
-            data[file_type] = {
-                "latest": entries[0][1],
-                "previous": entries[1][1],
-                "change_count": len(changes),
-                "changes": changes,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "changes_statistics": changes_stats,
-                "full_statistics": full_stats
-            }
-            print(f"Found {len(changes)} changes for {file_type}")
-            print(f"Full dataset has {full_stats['total_rows']} rows")
-        except Exception as e:
-            print(f"Error processing {file_type}: {str(e)}")
-
-    # Calculate overall statistics from all changes
-    if all_changes:
-        overall_changes_stats = calculate_changes_statistics(all_changes)
+        # Get the latest file
+        latest_file = os.path.join(input_dir, entries[0][1])
+        print(f"\nProcessing latest file for type '{file_type}': {entries[0][1]}")
         
-        # Get the full statistics from the latest file of the first file type
-        overall_full_stats = {}
-        if categorized and len(next(iter(categorized.values()))) > 0:
-            first_file_type = next(iter(categorized.keys()))
-            newest_file = os.path.join(directory, categorized[first_file_type][0][1])
-            try:
-                overall_full_stats = calculate_full_dataset_statistics(newest_file)
-            except Exception as e:
-                print(f"Error calculating full statistics: {str(e)}")
+        # Convert to snapshot
+        snapshot_path = excel_to_snapshot(latest_file, snapshots_dir)
         
-        # Add overall statistics to the data
-        data["summary"] = {
-            "total_changes": len(all_changes),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "changes_statistics": overall_changes_stats,
-            "full_statistics": overall_full_stats
-        }
-
-        # Add a current_status section to the output.json
-        # This will contain the current status of all serials
-        current_status = {}
-        for change in all_changes:
-            serial = change.get('serial', '')
-            if serial:
-                # If this serial is not in current_status or has a newer timestamp, update it
-                if serial not in current_status or change.get('timestamp', '') > current_status[serial].get('timestamp', ''):
-                    current_status[serial] = {
-                        'status': change.get('to', ''),
-                        'delivery': change.get('delivery', ''),
-                        'customer_name': change.get('customer_name', ''),
-                        'shipment_number': change.get('shipment_number', ''),
-                        'created_by': change.get('created_by', ''),
-                        'timestamp': change.get('timestamp', '')
-                    }
+        # Get the latest snapshots
+        latest_snapshots = get_latest_snapshots(snapshots_dir, 2)
         
-        # Add current_status to the data
-        data["current_status"] = current_status
-
-    if data:
-        # Implement memory optimization by processing data in chunks
-        # For large datasets, we'll write the output in a streaming manner
-        try:
-            # First write the basic structure without the changes array
-            with open(output_json_path, "w") as f:
-                # Create a copy of the data without the changes arrays
-                streamable_data = {}
-                for key, value in data.items():
-                    if key != "current_status" and isinstance(value, dict) and "changes" in value:
-                        streamable_data[key] = {k: v for k, v in value.items() if k != "changes"}
-                    else:
-                        streamable_data[key] = value
-                
-                json.dump(streamable_data, f, indent=2)
+        # If we have at least 2 snapshots, compare them
+        if len(latest_snapshots) >= 2:
+            print(f"Found {len(latest_snapshots)} snapshots, comparing the latest two")
+            # Compare the latest two snapshots
+            delta, delta_path = compare_snapshots(latest_snapshots[1], latest_snapshots[0], changes_dir)
             
-            print(f"[✓] JSON base structure saved to: {output_json_path}")
-            print(f"Total changes: {len(all_changes)}")
-        except Exception as e:
-            print(f"Error writing JSON: {str(e)}")
-    else:
-        print("No data to save - no valid comparisons were made")
+            # Append to master history
+            append_to_master_history(delta, master_history_path)
+            
+            # Generate current status
+            current_status = generate_current_status(delta, current_status_path)
+            
+            # Calculate statistics
+            stats = calculate_statistics(current_status)
+            
+            # Save statistics to a separate file
+            stats_path = os.path.join(data_dir, "statistics.json")
+            with open(stats_path, 'w') as f:
+                json.dump({
+                    "metadata": {
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                        "source": os.path.basename(current_status_path)
+                    },
+                    "statistics": stats
+                }, f, indent=2)
+            
+            print(f"Statistics saved to: {stats_path}")
+            
+            # Also save to the original output.json for backward compatibility
+            with open(config.OUTPUT_JSON, 'w') as f:
+                json.dump({
+                    "metadata": {
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                        "source": os.path.basename(current_status_path)
+                    },
+                    "statistics": stats,
+                    "current_status": current_status["records"]
+                }, f, indent=2)
+            
+            print(f"Output saved to: {config.OUTPUT_JSON}")
+        else:
+            print(f"Need at least 2 snapshots to compare. Only created the first snapshot.")
+            print(f"Run this script again with a new Excel file to create a second snapshot and generate a delta.")
 
 # Example usage
 if __name__ == "__main__":
-    consume_dir = config.INPUT_DIR
-    output_json = config.OUTPUT_JSON
-    process_directory(consume_dir, output_json)
+    process_directory(config.INPUT_DIR)
