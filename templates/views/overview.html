@@ -1,0 +1,53 @@
+<div id="overview-view" class="view-content">
+  <div class="row">
+    <div class="col-md-6">
+      <div class="card mb-4">
+        <div class="card-header">
+          <h5 class="card-title mb-0">Status Distribution</h5>
+        </div>
+        <div class="card-body">
+          <canvas id="status-chart" height="300"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="card mb-4">
+        <div class="card-header">
+          <h5 class="card-title mb-0">Customer Distribution</h5>
+        </div>
+        <div class="card-body">
+          <canvas id="customer-chart" height="300"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="card mb-4">
+    <div class="card-header">
+      <h5 class="card-title mb-0">Recent Changes</h5>
+    </div>
+    <div class="card-body">
+      <div class="table-responsive">
+        <table class="table table-striped table-hover">
+          <thead>
+            <tr>
+              <th>Serial</th>
+              <th>From</th>
+              <th>To</th>
+              <th>Delivery</th>
+              <th>Customer</th>
+              <th>Shipment</th>
+              <th>Time Since Change</th>
+            </tr>
+          </thead>
+          <tbody id="recent-changes-table">
+            <tr>
+              <td colspan="7" class="text-center">Loading data...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Script included in base.html -->

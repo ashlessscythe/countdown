@@ -1,0 +1,13 @@
+2025-04-29 14:23:26,527 - INFO - Starting scheduled execution with interval of 1 minutes
+2025-04-29 14:23:26,528 - INFO - Starting comparison process at 2025-04-29 14:23:26
+2025-04-29 14:23:31,075 - INFO - Comparison completed successfully
+2025-04-29 14:23:31,076 - INFO - Waiting 1 minutes until next execution
+2025-04-29 14:24:23,257 - INFO - Scheduled execution stopped by user
+2025-04-29 14:26:11,730 - INFO - Starting scheduled execution with interval of 15 seconds
+2025-04-29 14:26:11,731 - INFO - Starting comparison process at 2025-04-29 14:26:11
+2025-04-29 14:26:15,093 - INFO - Comparison completed successfully
+2025-04-29 14:26:15,104 - INFO - Waiting 15 seconds until next execution
+2025-04-29 14:26:30,105 - INFO - Starting comparison process at 2025-04-29 14:26:30
+2025-04-29 14:26:31,960 - INFO - Comparison completed successfully
+2025-04-29 14:26:31,961 - INFO - Waiting 15 seconds until next execution
+2025-04-29 14:26:33,215 - INFO - Scheduled execution stopped by user
