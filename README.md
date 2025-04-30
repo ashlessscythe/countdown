@@ -1,83 +1,86 @@
-# Delivery Analysis System
+# SAP Snapshot Comparison Dashboard
 
-A system for analyzing delivery and shipment status data from Excel files.
+A Flask-based dashboard for displaying differences (delta) between SAP snapshots. The dashboard shows time between scans for each user, providing insights into scan patterns and efficiency.
 
-## Overview
+## Features
 
-This system processes Excel files containing serial numbers, their statuses, and other information like delivery, customer, shipment, etc. It implements a workflow of snapshots and deltas to track historical changes and provide a dashboard with current status and changes over time.
+- Comparison of Excel snapshots from SAP
+- Calculation of time differences between scans for each user
+- Interactive dashboard with charts and tables
+- Automatic updates on a configurable interval
+- Support for large datasets (5-15k rows)
 
-## Workflow
-
-The system follows this workflow:
-
-1. **Snapshots**: Each Excel file is converted to a JSON snapshot, representing the state at a specific point in time.
-2. **Deltas**: Differences between snapshots are computed and saved as delta files.
-3. **History**: Deltas can be appended to a master history file for a complete historical record.
-4. **Dashboard**: The web dashboard displays current status and historical changes.
-
-## Folder Structure
+## Project Structure
 
 ```
-/data/
-  ├── snapshots/
-  │     ├── 20250430-1034.json
-  │     ├── 20250430-1040.json
-  ├── changes/
-  │     ├── 20250430-1040_delta.json
-  └── master_history.json
+├── app.py                 # Main Flask application
+├── compare_snapshots.py   # Script to compare Excel snapshots
+├── analyze_excel.py       # Script to analyze Excel files
+├── config.py              # Configuration settings
+├── convert.py             # Script to convert Excel files to JSON
+├── static/                # Static files
+│   ├── css/               # CSS stylesheets
+│   │   └── style.css      # Custom styles
+│   └── js/                # JavaScript files
+│       └── dashboard.js   # Dashboard functionality
+├── templates/             # HTML templates
+│   └── index.html         # Dashboard template
+├── utils/                 # Utility modules
+│   ├── __init__.py
+│   ├── background_tasks.py # Background task handling
+│   ├── data_utils.py       # Data utility functions
+│   └── time_utils.py       # Time-related utility functions
+└── sample_files/          # Sample Excel files for testing
+    ├── sample_1.xlsx
+    └── sample_2.xlsx
 ```
 
-## Components
+## Setup and Installation
 
-- **convert.py**: Converts Excel files to JSON snapshots.
-- **compare.py**: Compares snapshots to identify changes and generates delta files.
-- **log_updates.py**: Appends delta files to the master history.
-- **analyze_status.py**: Analyzes the data to provide summaries and statistics.
-- **app.py**: A Flask application that serves a web dashboard to visualize the data.
-- **scheduled_compare.py**: A script that runs the comparison process at scheduled intervals.
-- **status_cli.py**: A command-line interface for querying the status of serials.
-
-## Usage
-
-### Basic Usage
-
-1. Place Excel files in the input directory specified in config.py.
-2. Run compare.py to process the files and generate snapshots, deltas, and statistics.
-3. Run app.py to start the web dashboard.
-
-### Advanced Usage
-
-- **Manual Snapshot Creation**: Use convert.py to manually create a snapshot from an Excel file.
-
-  ```
-  python convert.py path/to/excel_file.xlsx
-  ```
-
-- **Manual Delta Processing**: Use log_updates.py to manually append delta files to the master history.
-
-  ```
-  python log_updates.py path/to/delta_file.json
-  ```
-
-- **Scheduled Execution**: Use scheduled_compare.py to run the comparison process at scheduled intervals.
-  ```
-  python scheduled_compare.py
-  ```
+1. Ensure you have Python 3.6+ installed
+2. Install required packages:
+   ```
+   pip install flask pandas plotly openpyxl
+   ```
+3. Configure the application in `config.py`
+4. Run the application:
+   ```
+   python app.py
+   ```
+5. Access the dashboard at http://localhost:5000
 
 ## Configuration
 
-Configuration settings are stored in config.py:
+Edit `config.py` to customize the following settings:
 
-- **BASE_DIR**: Base directory for data files.
-- **INPUT_DIR**: Input directory where Excel files are stored.
-- **OUTPUT_JSON**: Output JSON file path.
-- **UPDATE_INTERVAL**: Interval for scheduled execution (in seconds).
-- **FILTER_WHSE**: Warehouse filter.
+- `INPUT_DIR`: Directory where Excel files are stored
+- `UPDATE_INTERVAL`: Interval for automatic updates (in seconds)
+- `FILTER_WHSE`: Warehouse filter for data processing
 
-## Dashboard Display
+## Usage
 
-The dashboard provides several views:
+1. Place Excel files in the configured input directory
+2. The application will automatically compare the files on the configured interval
+3. View the dashboard to see the comparison results
+4. Use the "Refresh Data" button to manually trigger an update
 
-- **Current Status**: Count of ASH vs SHP by delivery/customer.
-- **Timeline View**: Serial status changes over time.
-- **User Activity**: Serials created by each user.
+## Dashboard Components
+
+- **Comparison Summary**: Overview of files compared, common serials, total users, and average scan time
+- **Average Scan Time by User**: Bar chart showing average scan time for each user
+- **Distribution of Scan Time Differences**: Histogram of time differences between scans
+- **Scan Timeline by Serial Number**: Timeline chart showing scan events for each serial number
+- **Detailed Scan Data**: Table with detailed information about each scan
+
+## Development
+
+To extend or modify the dashboard:
+
+1. Edit `templates/index.html` to change the dashboard layout
+2. Modify `static/css/style.css` to customize the appearance
+3. Update `static/js/dashboard.js` to change the dashboard functionality
+4. Modify `app.py` to add new API endpoints or features
+
+## License
+
+See the LICENSE file for details.
