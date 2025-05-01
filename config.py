@@ -8,16 +8,34 @@ import os
 # Default is the ZMDESNR folder in Documents/Reports
 BASE_DIR = os.path.join("C:\\", "temp", "reports", "ZMDESNR")
 
-# Input directory where Excel files are stored
-INPUT_DIR = BASE_DIR
+# Input directory where Excel files are stored (where XLSX snapshots are dropped)
+DATA_DIR = BASE_DIR
 
-# Output JSON file path
-OUTPUT_JSON = os.path.join(BASE_DIR, "output.json")
+# Output directory for Parquet files
+OUT_DIR = os.path.join(BASE_DIR, "parquet_output")
 
-# Default settings
-DEFAULT_OUTPUT_FORMAT = "text"  # Options: "text", "json", "dataframe"
+# Ensure output directory exists
+os.makedirs(OUT_DIR, exist_ok=True)
 
 # Interval settings for scheduled execution (in seconds)
-UPDATE_INTERVAL = 60  # Default: Run every 60 seconds
+INTERVAL_SECONDS = 60  # Default: Run every 60 seconds
 
-FILTER_WHSE = "E01" # Default warehouse filter
+# Window for time-based metrics (in minutes)
+WINDOW_MINUTES = 60  # Default: 60 minutes window for user activity metrics
+
+# Column mapping for Excel files
+COLUMNS = {
+    "Serial #": "serial",
+    "Status": "status",
+    "Delivery": "delivery",
+    "Shipment Number": "shipment",
+    "Created by": "user",
+    "Time": "time",
+    "Created on": "created_on"
+}
+
+# Status code mapping
+STATUS_MAPPING = {
+    "ASH": "picked",
+    "SHP": "shipped / closed"
+}

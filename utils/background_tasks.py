@@ -1,57 +1,47 @@
 import threading
 import time
 from datetime import datetime
-from compare_snapshots import compare_snapshots
 import config
 import os
+import subprocess
 
 # Flag to control the background thread
 keep_running = True
 
-def run_scheduled_compare():
-    """Run the comparison process in a background thread"""
-    global keep_running
-    print(f"Starting scheduled comparison thread with interval of {config.UPDATE_INTERVAL} seconds")
+# Flag to track if a process is currently running
+process_running = False
+
+def run_scheduled_process():
+    """Run the snapshot processing in a background thread"""
+    global keep_running, process_running
+    print(f"Starting scheduled processing thread with interval of {config.INTERVAL_SECONDS} seconds")
     
     while keep_running:
         try:
-            print(f"Running comparison at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-            
-            # Get all Excel files in the input directory defined in config
-            input_dir = config.INPUT_DIR
-            excel_files = [f for f in os.listdir(input_dir) if f.endswith('.xlsx')]
-            
-            if len(excel_files) < 2:
-                print("Need at least two Excel files for comparison")
-                continue
-            
-            # Sort Excel files by name
-            excel_files.sort()
-            
-            # Compare the first two files
-            file1 = os.path.join(input_dir, excel_files[0])
-            file2 = os.path.join(input_dir, excel_files[1])
-            
-            print(f"Comparing files: {file1} and {file2}")
-            results = compare_snapshots(file1, file2)
-            
-            # Save the results to a JSON file
-            with open('comparison_results.json', 'w') as f:
-                import json
-                json.dump(results, f, indent=2)
-            
-            print(f"Comparison completed successfully")
+            # Only run if no process is currently running
+            if not process_running:
+                process_running = True
+                print(f"Running snapshot processing at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                
+                # Run the compare_snapshots.py script as a subprocess
+                subprocess.run(["python", "compare_snapshots.py"], check=True)
+                
+                print(f"Snapshot processing completed successfully")
+                process_running = False
+            else:
+                print(f"Skipping scheduled run as a process is already running")
         except Exception as e:
-            print(f"Error during comparison process: {str(e)}")
+            print(f"Error during snapshot processing: {str(e)}")
+            process_running = False
         
         # Wait for the next interval
-        time.sleep(config.UPDATE_INTERVAL)
+        time.sleep(config.INTERVAL_SECONDS)
 
 def start_background_thread():
-    """Start the background thread for scheduled comparisons"""
-    compare_thread = threading.Thread(target=run_scheduled_compare, daemon=True)
-    compare_thread.start()
-    return compare_thread
+    """Start the background thread for scheduled processing"""
+    process_thread = threading.Thread(target=run_scheduled_process, daemon=True)
+    process_thread.start()
+    return process_thread
 
 def stop_background_thread():
     """Stop the background thread"""

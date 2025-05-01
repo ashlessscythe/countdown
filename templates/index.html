@@ -52,14 +52,14 @@
         <div class="col-md-12">
           <div class="card mb-4">
             <div class="card-header">
-              <h5 class="card-title">Comparison Summary</h5>
+              <h5 class="card-title">Dashboard Summary</h5>
             </div>
             <div class="card-body">
               <div class="row">
                 <div class="col-md-3">
                   <div class="card text-white bg-primary mb-3">
                     <div class="card-body">
-                      <h5 class="card-title">Files Compared</h5>
+                      <h5 class="card-title">Files Processed</h5>
                       <p class="card-text" id="files-compared">Loading...</p>
                     </div>
                   </div>
@@ -67,12 +67,12 @@
                 <div class="col-md-3">
                   <div class="card text-white bg-success mb-3">
                     <div class="card-body">
-                      <h5 class="card-title">Common Serials</h5>
+                      <h5 class="card-title">Total Serials</h5>
                       <p class="card-text" id="common-serials">Loading...</p>
                     </div>
                   </div>
                 </div>
-                <div class="col-md-3">
+                <div class="col-md-2">
                   <div class="card text-white bg-info mb-3">
                     <div class="card-body">
                       <h5 class="card-title">Total Users</h5>
@@ -80,11 +80,19 @@
                     </div>
                   </div>
                 </div>
-                <div class="col-md-3">
+                <div class="col-md-2">
                   <div class="card text-white bg-warning mb-3">
                     <div class="card-body">
-                      <h5 class="card-title">Avg. Time Between Scans</h5>
+                      <h5 class="card-title">Scan Count</h5>
                       <p class="card-text" id="avg-time">Loading...</p>
+                    </div>
+                  </div>
+                </div>
+                <div class="col-md-2">
+                  <div class="card text-white bg-secondary mb-3">
+                    <div class="card-body">
+                      <h5 class="card-title">Time Window</h5>
+                      <p class="card-text" id="warehouse-filter">Loading...</p>
                     </div>
                   </div>
                 </div>
@@ -98,20 +106,43 @@
         <div class="col-md-6">
           <div class="card mb-4">
             <div class="card-header">
-              <h5 class="card-title">Average Scan Time by User</h5>
+              <h5 class="card-title">Status Summary</h5>
             </div>
             <div class="card-body">
-              <div id="user-scan-times-chart" style="height: 400px"></div>
+              <div id="status-summary-chart" style="height: 400px"></div>
             </div>
           </div>
         </div>
         <div class="col-md-6">
           <div class="card mb-4">
             <div class="card-header">
-              <h5 class="card-title">Distribution of Scan Time Differences</h5>
+              <h5 class="card-title">User Activity</h5>
             </div>
             <div class="card-body">
-              <div id="scan-distribution-chart" style="height: 400px"></div>
+              <div id="user-activity-chart" style="height: 400px"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col-md-6">
+          <div class="card mb-4">
+            <div class="card-header">
+              <h5 class="card-title">Status by Delivery</h5>
+            </div>
+            <div class="card-body">
+              <div id="status-by-delivery-chart" style="height: 400px"></div>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="card mb-4">
+            <div class="card-header">
+              <h5 class="card-title">Shipment Tree</h5>
+            </div>
+            <div class="card-body">
+              <div id="shipment-tree-chart" style="height: 400px"></div>
             </div>
           </div>
         </div>
@@ -121,20 +152,7 @@
         <div class="col-md-12">
           <div class="card mb-4">
             <div class="card-header">
-              <h5 class="card-title">Scan Timeline by Serial Number</h5>
-            </div>
-            <div class="card-body">
-              <div id="timeline-chart" style="height: 600px"></div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="row">
-        <div class="col-md-12">
-          <div class="card mb-4">
-            <div class="card-header">
-              <h5 class="card-title">Detailed Scan Data</h5>
+              <h5 class="card-title">User Activity Details</h5>
             </div>
             <div class="card-body">
               <div class="table-responsive">
@@ -144,14 +162,15 @@
                 >
                   <thead>
                     <tr>
-                      <th>Serial #</th>
-                      <th>Time Difference (s)</th>
-                      <th>Earlier User</th>
-                      <th>Later User</th>
-                      <th>Earlier Timestamp</th>
-                      <th>Later Timestamp</th>
-                      <th>Status</th>
-                      <th>Customer</th>
+                      <th>User ID</th>
+                      <th>Current Shipment</th>
+                      <th>Progress</th>
+                      <th>ASH / SHP Count</th>
+                      <th>Number of Scans</th>
+                      <th>Last Scan Time</th>
+                      <th>Previous Scan Time</th>
+                      <th>Time Since Last Scan</th>
+                      <th>Seconds Since Last Scan</th>
                     </tr>
                   </thead>
                   <tbody>
