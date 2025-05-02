@@ -1,86 +1,107 @@
-# SAP Snapshot Comparison Dashboard
+# Delivery Dashboard
 
-A Flask-based dashboard for displaying differences (delta) between SAP snapshots. The dashboard shows time between scans for each user, providing insights into scan patterns and efficiency.
+A dashboard application for tracking delivery shipments and user activity in real-time.
 
-## Features
+## Overview
 
-- Comparison of Excel snapshots from SAP
-- Calculation of time differences between scans for each user
-- Interactive dashboard with charts and tables
-- Automatic updates on a configurable interval
-- Support for large datasets (5-15k rows)
+This application processes data from ZMDESNR and VL06O Excel files to provide a real-time dashboard showing:
+
+- User ID with shipment information
+- Progress indicators (e.g., "30 out of 75")
+- Current and previous scan times
+- Warehouse-specific data (filtered for configured warehouse)
+
+The system watches for new files in the specified directories and automatically updates the dashboard when new data is available.
 
 ## Project Structure
 
 ```
-├── app.py                 # Main Flask application
-├── compare_snapshots.py   # Script to compare Excel snapshots
-├── analyze_excel.py       # Script to analyze Excel files
-├── config.py              # Configuration settings
-├── convert.py             # Script to convert Excel files to JSON
-├── static/                # Static files
-│   ├── css/               # CSS stylesheets
-│   │   └── style.css      # Custom styles
-│   └── js/                # JavaScript files
-│       └── dashboard.js   # Dashboard functionality
-├── templates/             # HTML templates
-│   └── index.html         # Dashboard template
-├── utils/                 # Utility modules
-│   ├── __init__.py
-│   ├── background_tasks.py # Background task handling
-│   ├── data_utils.py       # Data utility functions
-│   └── time_utils.py       # Time-related utility functions
-└── sample_files/          # Sample Excel files for testing
-    ├── sample_1.xlsx
-    └── sample_2.xlsx
+delivery-dashboard/
+├── backend/
+│   ├── data_processing/      # Data processing modules
+│   ├── storage/              # Data storage and caching
+│   └── api/                  # API endpoints
+├── frontend/                 # Frontend dashboard (to be implemented)
+├── config.py                 # Configuration settings
+├── main.py                   # Application entry point
+├── requirements.txt          # Python dependencies
+└── README.md                 # This file
 ```
 
-## Setup and Installation
+## Requirements
 
-1. Ensure you have Python 3.6+ installed
-2. Install required packages:
-   ```
-   pip install flask pandas plotly openpyxl
-   ```
-3. Configure the application in `config.py`
-4. Run the application:
-   ```
-   python app.py
-   ```
-5. Access the dashboard at http://localhost:5000
+- Python 3.8+
+- Pandas, NumPy, and other dependencies listed in requirements.txt
+
+## Installation
+
+1. Clone the repository
+2. Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
 
 ## Configuration
 
-Edit `config.py` to customize the following settings:
+1. Copy the example configuration file to create your own configuration:
 
-- `INPUT_DIR`: Directory where Excel files are stored
-- `UPDATE_INTERVAL`: Interval for automatic updates (in seconds)
-- `FILTER_WHSE`: Warehouse filter for data processing
+```bash
+cp config.py.example config.py
+```
+
+2. Edit `config.py` to configure:
+
+- Data file directories
+- Warehouse filter (replace WAREHOUSE_CODE with your specific warehouse code)
+- Update intervals
+- Output directory for processed data
+
+Note: `config.py` is excluded from version control via .gitignore to prevent sensitive information from being shared.
 
 ## Usage
 
-1. Place Excel files in the configured input directory
-2. The application will automatically compare the files on the configured interval
-3. View the dashboard to see the comparison results
-4. Use the "Refresh Data" button to manually trigger an update
+### Running the Application
 
-## Dashboard Components
+To run the dashboard application:
 
-- **Comparison Summary**: Overview of files compared, common serials, total users, and average scan time
-- **Average Scan Time by User**: Bar chart showing average scan time for each user
-- **Distribution of Scan Time Differences**: Histogram of time differences between scans
-- **Scan Timeline by Serial Number**: Timeline chart showing scan events for each serial number
-- **Detailed Scan Data**: Table with detailed information about each scan
+```bash
+python main.py
+```
 
-## Development
+This will:
 
-To extend or modify the dashboard:
+1. Process the latest ZMDESNR and VL06O files
+2. Generate dashboard data
+3. Start watching for new files
+4. Update the dashboard when new files are detected
 
-1. Edit `templates/index.html` to change the dashboard layout
-2. Modify `static/css/style.css` to customize the appearance
-3. Update `static/js/dashboard.js` to change the dashboard functionality
-4. Modify `app.py` to add new API endpoints or features
+### Testing Data Processing
 
-## License
+To test the data processing modules without starting the full application:
 
-See the LICENSE file for details.
+```bash
+python main.py --test
+```
+
+This will process the latest files and display statistics without starting the file watcher.
+
+## Data Processing
+
+The application processes data in the following steps:
+
+1. **Reading**: Reads the latest ZMDESNR and VL06O Excel files
+2. **Sanitization**: Standardizes headers and cleans data
+3. **Filtering**: Filters for Pallet=1 and the configured Warehouse Number
+4. **Transformation**: Extracts metrics like progress and scan times
+5. **Storage**: Saves processed data as JSON files
+
+## Development Status
+
+- [x] Tollgate 1: Data Processing Setup
+- [ ] Tollgate 2: Data Storage and Caching
+- [ ] Tollgate 3: Backend API Development
+- [ ] Tollgate 4: Frontend Dashboard Development
+- [ ] Tollgate 5: Testing and Deployment
+
+See `todo.md` for detailed development status and upcoming tasks.

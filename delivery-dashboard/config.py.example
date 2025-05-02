@@ -1,12 +1,18 @@
 """
 Configuration file for delivery analysis tools.
 Contains paths and settings used by all scripts in the project.
+EXAMPLE FILE - Copy to config.py and update with your specific settings
 """
 import os
 
 # Base directory for data files
-# Default is the ZMDESNR folder in Documents/Reports
-BASE_DIR = os.path.join("C:\\", "temp", "reports", "ZMDESNR")
+BASE_DIR = os.path.join("C:\\", "path", "to", "reports")
+
+# dir for serial numbers
+SERIAL_NUMBERS_DIR = os.path.join(BASE_DIR, "ZMDESNR")
+
+# directory for delivery info
+DELIVERY_INFO_DIR = os.path.join(BASE_DIR, "VL06O")
 
 # Input directory where Excel files are stored (where XLSX snapshots are dropped)
 DATA_DIR = BASE_DIR
@@ -23,19 +29,14 @@ INTERVAL_SECONDS = 60  # Default: Run every 60 seconds
 # Window for time-based metrics (in minutes)
 WINDOW_MINUTES = 60  # Default: 60 minutes window for user activity metrics
 
-# Column mapping for Excel files
-COLUMNS = {
-    "Serial #": "serial",
-    "Status": "status",
-    "Delivery": "delivery",
-    "Shipment Number": "shipment",
-    "Created by": "user",
-    "Time": "time",
-    "Created on": "created_on"
-}
+# Warehouse filter
+WAREHOUSE_FILTER = "WAREHOUSE_CODE"  # Replace with your warehouse code
 
 # Status code mapping
 STATUS_MAPPING = {
     "ASH": "picked",
     "SHP": "shipped / closed"
 }
+
+# Frontend settings
+FRONTEND_UPDATE_INTERVAL = 10  # Update frontend every 10 seconds
