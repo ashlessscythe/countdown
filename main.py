@@ -15,6 +15,10 @@ from backend.data_processing.sanitizers import sanitize_zmdesnr_dataframe, sanit
 from backend.data_processing.transformers import prepare_dashboard_data
 from backend.data_processing.watchers import poll_for_new_files, file_change_callback
 
+# Import storage modules
+from backend.storage.parquet_manager import save_dashboard_data_to_parquet, diff_dashboard_data, get_latest_parquet, load_from_parquet
+from backend.storage.cache import dashboard_cache
+
 # Import configuration
 from config import (
     SERIAL_NUMBERS_DIR, 
@@ -54,14 +58,56 @@ def process_files():
     # Prepare dashboard data
     dashboard_data = prepare_dashboard_data(combined_df)
     
-    # Save the dashboard data to a JSON file
+    # Generate timestamp for file naming
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    json_path = os.path.join(OUT_DIR, f"dashboard_data_{timestamp}.json")
     
+    # Save the dashboard data to a JSON file (for backward compatibility)
+    json_path = os.path.join(OUT_DIR, f"dashboard_data_{timestamp}.json")
     with open(json_path, 'w') as f:
         json.dump(dashboard_data, f, default=str, indent=2)
-    
     logger.info(f"Dashboard data saved to {json_path}")
+    
+    # Save the dashboard data to Parquet files
+    parquet_paths = save_dashboard_data_to_parquet(dashboard_data, timestamp)
+    if parquet_paths:
+        logger.info(f"Dashboard data saved to Parquet files: {', '.join(parquet_paths.values())}")
+    
+    # Update the cache with the new dashboard data
+    dashboard_cache.set_dashboard_data(dashboard_data)
+    logger.info("Dashboard data cached for quick access")
+    
+    # Calculate diff with previous data
+    try:
+        # Get previous dashboard data from cache or JSON
+        previous_data = dashboard_cache.get('previous_dashboard_data')
+        
+        if not previous_data:
+            # If not in cache, try to load from JSON
+            previous_json_files = [f for f in os.listdir(OUT_DIR) if f.startswith("dashboard_data_") and f.endswith(".json") and f != f"dashboard_data_{timestamp}.json"]
+            if previous_json_files:
+                previous_json_files.sort(reverse=True)  # Most recent first
+                previous_json_path = os.path.join(OUT_DIR, previous_json_files[0])
+                
+                with open(previous_json_path, 'r') as f:
+                    previous_data = json.load(f)
+        
+        if previous_data:
+            # Calculate diff
+            diff = diff_dashboard_data(dashboard_data, previous_data)
+            
+            # Save diff to JSON file
+            diff_path = os.path.join(OUT_DIR, f"diff_{timestamp}.json")
+            with open(diff_path, 'w') as f:
+                json.dump(diff, f, default=str, indent=2)
+            logger.info(f"Data diff saved to {diff_path}")
+            
+            # Cache the diff
+            dashboard_cache.set('latest_diff', diff)
+        
+        # Store current data as previous for next diff
+        dashboard_cache.set('previous_dashboard_data', dashboard_data)
+    except Exception as e:
+        logger.error(f"Error calculating data diff: {str(e)}")
     
     return dashboard_data
 
@@ -78,9 +124,10 @@ def file_update_handler(file_type, file_path):
     # Process the files and update the dashboard data
     dashboard_data = process_files()
     
-    # Here you would typically:
-    # 1. Update any caches or storage
-    # 2. Notify the frontend of new data
+    # Cache is already updated in process_files, but we can add additional metadata
+    dashboard_cache.set('last_update_time', datetime.now().isoformat())
+    dashboard_cache.set('last_update_file_type', file_type)
+    dashboard_cache.set('last_update_file_path', file_path)
     
     logger.info(f"Processed new {file_type.upper()} file. Dashboard data updated.")
 
@@ -134,6 +181,20 @@ def test_data_processing():
     num_users = len(dashboard_data.get('users', []))
     num_deliveries = len(dashboard_data.get('deliveries', []))
     logger.info(f"Dashboard data: {num_users} users, {num_deliveries} deliveries")
+    
+    # Generate timestamp for file naming
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    
+    # Save the dashboard data to Parquet files
+    parquet_paths = save_dashboard_data_to_parquet(dashboard_data, timestamp)
+    if parquet_paths:
+        logger.info(f"Test data saved to Parquet files: {', '.join(parquet_paths.values())}")
+    
+    # Update the cache with the test data
+    dashboard_cache.set_dashboard_data(dashboard_data)
+    dashboard_cache.set('test_mode', True)
+    dashboard_cache.set('test_timestamp', timestamp)
+    logger.info("Test data cached for quick access")
     
     return dashboard_data
 

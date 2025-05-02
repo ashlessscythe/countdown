@@ -10,12 +10,12 @@
   - [x] Create data transformation functions to extract required metrics
   - [x] Implement file watching mechanism for new files
 
-- [ ] Tollgate 2: Data Storage and Caching
+- [x] Tollgate 2: Data Storage and Caching
 
-  - [ ] Set up Parquet file storage for processed data
-  - [ ] Implement diffing mechanism to track changes
-  - [ ] Create data caching system for quick dashboard updates
-  - [ ] Set up interval-based data refresh
+  - [x] Set up Parquet file storage for processed data
+  - [x] Implement diffing mechanism to track changes
+  - [x] Create data caching system for quick dashboard updates
+  - [x] Set up interval-based data refresh
 
 - [ ] Tollgate 3: Backend API Development
 

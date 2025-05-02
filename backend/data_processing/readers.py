@@ -149,8 +149,9 @@ def get_combined_data():
     
     # Ensure delivery column is of the same type in both dataframes
     if 'delivery' in serials_df.columns and 'delivery' in deliveries_df.columns:
-        serials_df['delivery'] = serials_df['delivery'].astype(str)
-        deliveries_df['delivery'] = deliveries_df['delivery'].astype(str)
+        # Convert to integers first to remove decimal points, then to strings
+        serials_df['delivery'] = serials_df['delivery'].fillna(0).astype(int).astype(str)
+        deliveries_df['delivery'] = deliveries_df['delivery'].fillna(0).astype(int).astype(str)
         
         # Merge the dataframes on delivery
         combined_df = pd.merge(
