@@ -25,14 +25,14 @@
   - [x] Create scan time tracking functionality
   - [x] Implement real-time data updates
 
-- [ ] Tollgate 4: Frontend Dashboard Development
+- [x] Tollgate 4: Frontend Dashboard Development
 
-  - [ ] Create basic dashboard layout
-  - [ ] Implement user ID and shipment display
-  - [ ] Create progress indicators (e.g., "30 out of 75")
-  - [ ] Add scan time displays (current and previous)
-  - [ ] Implement auto-refresh functionality
-  - [ ] Add responsive design for different screen sizes
+  - [x] Create basic dashboard layout
+  - [x] Implement user ID and shipment display
+  - [x] Create progress indicators (e.g., "30 out of 75")
+  - [x] Add scan time displays (current and previous)
+  - [x] Implement auto-refresh functionality
+  - [x] Add responsive design for different screen sizes
 
 - [ ] Tollgate 5: Testing and Deployment
   - [ ] Test with sample data
