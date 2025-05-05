@@ -1,17 +1,19 @@
 # Delivery Dashboard
 
-A dashboard application for tracking delivery shipments and user activity in real-time.
+A dashboard application for tracking delivery progress and user activity.
 
-## Overview
+## Project Overview
 
-This application processes data from ZMDESNR and VL06O Excel files to provide a real-time dashboard showing:
+The Delivery Dashboard is designed to track and visualize delivery progress and user activity in real-time. It processes data from ZMDESNR and VL06O Excel files, transforms the data, and provides a RESTful API for frontend consumption.
 
-- User ID with shipment information
-- Progress indicators (e.g., "30 out of 75")
-- Current and previous scan times
-- Warehouse-specific data (filtered for configured warehouse)
+## Features
 
-The system watches for new files in the specified directories and automatically updates the dashboard when new data is available.
+- Data processing from ZMDESNR and VL06O Excel files
+- Real-time data updates via WebSockets
+- RESTful API for dashboard data
+- User activity tracking
+- Delivery progress calculation
+- Scan time tracking
 
 ## Project Structure
 
@@ -20,88 +22,118 @@ delivery-dashboard/
 ├── backend/
 │   ├── data_processing/      # Data processing modules
 │   ├── storage/              # Data storage and caching
-│   └── api/                  # API endpoints
-├── frontend/                 # Frontend dashboard (to be implemented)
-├── config.py                 # Configuration settings
+│   ├── api/                  # API endpoints and services
+│   └── app.py                # Main backend application
+├── frontend/                 # Frontend application (to be implemented)
+├── config.py                 # Configuration file
 ├── main.py                   # Application entry point
-├── requirements.txt          # Python dependencies
-└── README.md                 # This file
+├── test_api.py               # API test script
+└── requirements.txt          # Dependencies
 ```
-
-## Requirements
-
-- Python 3.8+
-- Pandas, NumPy, and other dependencies listed in requirements.txt
 
 ## Installation
 
-1. Clone the repository
-2. Install dependencies:
+1. Clone the repository:
+
+```bash
+git clone <repository-url>
+cd delivery-dashboard
+```
+
+2. Create and activate a virtual environment:
+
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+3. Install dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Configuration
+4. Configure the application:
 
-1. Copy the example configuration file to create your own configuration:
+Copy the example configuration file and modify it as needed:
 
 ```bash
 cp config.py.example config.py
 ```
 
-2. Edit `config.py` to configure:
-
-- Data file directories
-- Warehouse filter (replace WAREHOUSE_CODE with your specific warehouse code)
-- Update intervals
-- Output directory for processed data
-
-Note: `config.py` is excluded from version control via .gitignore to prevent sensitive information from being shared.
+Edit `config.py` to set the appropriate paths for your environment.
 
 ## Usage
 
 ### Running the Application
 
-To run the dashboard application:
+To run the full application (data processing + API server):
 
 ```bash
 python main.py
 ```
 
-This will:
+To run only the API server without data processing:
 
-1. Process the latest ZMDESNR and VL06O files
-2. Generate dashboard data
-3. Start watching for new files
-4. Update the dashboard when new files are detected
+```bash
+python main.py --api-only
+```
 
-### Testing Data Processing
-
-To test the data processing modules without starting the full application:
+To test the data processing without starting the API server:
 
 ```bash
 python main.py --test
 ```
 
-This will process the latest files and display statistics without starting the file watcher.
+### API Endpoints
 
-## Data Processing
+The API is available at `http://localhost:8000/api` with the following endpoints:
 
-The application processes data in the following steps:
+- `GET /api/dashboard` - Get all dashboard data
+- `GET /api/users` - Get user activity data
+  - Query parameters:
+    - `active_only` (boolean): If true, return only active users
+- `GET /api/progress` - Get delivery progress data
+  - Query parameters:
+    - `delivery_id` (string): Filter by delivery ID
+    - `user_id` (string): Filter by user ID
+- `GET /api/scan-times` - Get scan time data
+  - Query parameters:
+    - `user_id` (string): Filter by user ID
+- `POST /api/track-activity` - Track user activity
+  - Query parameters:
+    - `user_id` (string): User ID
+    - `activity_type` (string): Type of activity (e.g., 'scan', 'view')
+- `WebSocket /api/ws` - WebSocket endpoint for real-time updates
 
-1. **Reading**: Reads the latest ZMDESNR and VL06O Excel files
-2. **Sanitization**: Standardizes headers and cleans data
-3. **Filtering**: Filters for Pallet=1 and the configured Warehouse Number
-4. **Transformation**: Extracts metrics like progress and scan times
-5. **Storage**: Saves processed data as JSON files
+### Testing the API
 
-## Development Status
+To test the API endpoints:
 
-- [x] Tollgate 1: Data Processing Setup
-- [ ] Tollgate 2: Data Storage and Caching
-- [ ] Tollgate 3: Backend API Development
-- [ ] Tollgate 4: Frontend Dashboard Development
-- [ ] Tollgate 5: Testing and Deployment
+```bash
+# Start the API server in one terminal
+python main.py
 
-See `todo.md` for detailed development status and upcoming tasks.
+# Run the test script in another terminal
+python test_api.py
+```
+
+## Development
+
+### Adding New Features
+
+1. Implement data processing in `backend/data_processing/`
+2. Add storage functionality in `backend/storage/`
+3. Create API endpoints in `backend/api/routes.py`
+4. Implement business logic in `backend/api/services.py`
+5. Update the frontend to consume the API
+
+### Running Tests
+
+```bash
+python test_api.py
+```
+
+## License
+
+See the [LICENSE](LICENSE) file for details.

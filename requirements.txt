@@ -9,9 +9,15 @@ pyarrow>=14.0.1  # For Parquet file support
 # File watching
 watchdog>=3.0.0
 
-# API and web server (for future implementation)
-flask>=2.3.3
-flask-cors>=4.0.0
+# API and web server
+requests>=2.31.0  # For making HTTP requests
+fastapi>=0.104.0  # Modern, high-performance web framework
+uvicorn>=0.23.2  # ASGI server for FastAPI
+websockets>=11.0.3  # For WebSocket support
+pydantic>=2.4.2  # Data validation for FastAPI
+
+# CORS support
+starlette>=0.27.0  # ASGI framework used by FastAPI
 
 # Utilities
 python-dateutil>=2.8.2
