@@ -1,139 +1,73 @@
 # Delivery Dashboard
 
-A dashboard application for tracking delivery progress and user activity.
+A dashboard application for tracking deliveries with a Python FastAPI backend and React frontend.
 
-## Project Overview
+## Prerequisites
 
-The Delivery Dashboard is designed to track and visualize delivery progress and user activity in real-time. It processes data from ZMDESNR and VL06O Excel files, transforms the data, and provides a RESTful API for frontend consumption.
+- Python 3.x with pip
+- Node.js and npm
 
-## Features
+## Setup
 
-- Data processing from ZMDESNR and VL06O Excel files
-- Real-time data updates via WebSockets
-- RESTful API for dashboard data
-- User activity tracking
-- Delivery progress calculation
-- Scan time tracking
+1. Clone this repository
+2. Install backend dependencies:
+   ```
+   pip install -r requirements.txt
+   ```
+3. Install frontend dependencies:
+   ```
+   cd frontend
+   npm install
+   ```
+4. Create a `config.py` file based on the `config.py.example` template
 
-## Project Structure
+## Running the Application
+
+### Option 1: Using the run script (recommended)
+
+You can run both the backend and frontend with a single command:
+
+#### Windows Command Prompt:
 
 ```
-delivery-dashboard/
-├── backend/
-│   ├── data_processing/      # Data processing modules
-│   ├── storage/              # Data storage and caching
-│   ├── api/                  # API endpoints and services
-│   └── app.py                # Main backend application
-├── frontend/                 # Frontend application (to be implemented)
-├── config.py                 # Configuration file
-├── main.py                   # Application entry point
-├── test_api.py               # API test script
-└── requirements.txt          # Dependencies
+run.bat
 ```
 
-## Installation
+#### PowerShell:
 
-1. Clone the repository:
-
-```bash
-git clone <repository-url>
-cd delivery-dashboard
+```
+.\run.ps1
 ```
 
-2. Create and activate a virtual environment:
+This will start both the backend server on port 8080 and the frontend development server on port 3000.
 
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+### Option 2: Running manually
+
+#### Backend:
+
+```
+python main.py --port 8080
 ```
 
-3. Install dependencies:
+#### Frontend:
 
-```bash
-pip install -r requirements.txt
+```
+cd frontend
+npm start
 ```
 
-4. Configure the application:
+## Accessing the Application
 
-Copy the example configuration file and modify it as needed:
+Once both servers are running:
 
-```bash
-cp config.py.example config.py
-```
+- Frontend: http://localhost:3000
+- Backend API: http://localhost:8080/api
+- API Documentation: http://localhost:8080/docs
 
-Edit `config.py` to set the appropriate paths for your environment.
+## Troubleshooting
 
-## Usage
+If you see "Proxy error: Could not proxy request" errors in the frontend:
 
-### Running the Application
-
-To run the full application (data processing + API server):
-
-```bash
-python main.py
-```
-
-To run only the API server without data processing:
-
-```bash
-python main.py --api-only
-```
-
-To test the data processing without starting the API server:
-
-```bash
-python main.py --test
-```
-
-### API Endpoints
-
-The API is available at `http://localhost:8000/api` with the following endpoints:
-
-- `GET /api/dashboard` - Get all dashboard data
-- `GET /api/users` - Get user activity data
-  - Query parameters:
-    - `active_only` (boolean): If true, return only active users
-- `GET /api/progress` - Get delivery progress data
-  - Query parameters:
-    - `delivery_id` (string): Filter by delivery ID
-    - `user_id` (string): Filter by user ID
-- `GET /api/scan-times` - Get scan time data
-  - Query parameters:
-    - `user_id` (string): Filter by user ID
-- `POST /api/track-activity` - Track user activity
-  - Query parameters:
-    - `user_id` (string): User ID
-    - `activity_type` (string): Type of activity (e.g., 'scan', 'view')
-- `WebSocket /api/ws` - WebSocket endpoint for real-time updates
-
-### Testing the API
-
-To test the API endpoints:
-
-```bash
-# Start the API server in one terminal
-python main.py
-
-# Run the test script in another terminal
-python test_api.py
-```
-
-## Development
-
-### Adding New Features
-
-1. Implement data processing in `backend/data_processing/`
-2. Add storage functionality in `backend/storage/`
-3. Create API endpoints in `backend/api/routes.py`
-4. Implement business logic in `backend/api/services.py`
-5. Update the frontend to consume the API
-
-### Running Tests
-
-```bash
-python test_api.py
-```
-
-## License
-
-See the [LICENSE](LICENSE) file for details.
+1. Make sure the backend server is running
+2. The backend might need more time to initialize - try refreshing the page after a few seconds
+3. Check that the `proxy` setting in `frontend/package.json` is set to `"http://localhost:8080"`

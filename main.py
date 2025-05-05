@@ -70,16 +70,43 @@ def test_data_processing():
     
     return dashboard_data
 
+def run_dashboard_with_port(port=8000):
+    """
+    Run the dashboard application with FastAPI backend on a specific port.
+    """
+    logger.info(f"Starting Delivery Dashboard application on port {port}...")
+    
+    # Import here to avoid circular imports
+    from backend.app import app
+    
+    # Run the FastAPI application
+    uvicorn.run(app, host="0.0.0.0", port=port)
+
 if __name__ == "__main__":
     # Check command line arguments
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "--test":
+    port = 8000  # Default port
+    
+    # Parse arguments
+    i = 1
+    while i < len(sys.argv):
+        if sys.argv[i] == "--test":
             # Run in test mode
             test_data_processing()
-        elif sys.argv[1] == "--api-only":
+            sys.exit(0)
+        elif sys.argv[i] == "--api-only":
             # Run only the API server without file processing
             from backend.app import app
-            uvicorn.run(app, host="0.0.0.0", port=8000)
-    else:
-        # Run the dashboard application
-        run_dashboard()
+            uvicorn.run(app, host="0.0.0.0", port=port)
+            sys.exit(0)
+        elif sys.argv[i] == "--port" and i + 1 < len(sys.argv):
+            # Set custom port
+            try:
+                port = int(sys.argv[i + 1])
+                i += 1  # Skip the next argument (port number)
+            except ValueError:
+                logger.error(f"Invalid port number: {sys.argv[i + 1]}")
+                sys.exit(1)
+        i += 1
+    
+    # Run the dashboard application with the specified port
+    run_dashboard_with_port(port)
