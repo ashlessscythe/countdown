@@ -186,4 +186,13 @@ async def global_exception_handler(request, exc):
 
 if __name__ == "__main__":
     # Run the application with uvicorn
-    uvicorn.run("backend.app:app", host="0.0.0.0", port=8000, reload=True)
+    # Use a different default port (8001) when run directly to avoid conflicts with main.py
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Run the Delivery Dashboard API")
+    parser.add_argument("--port", type=int, default=8001, 
+                        help="Port to run the API on (default: 8001)")
+    args = parser.parse_args()
+    
+    print(f"Starting API server on port {args.port}...")
+    uvicorn.run("backend.app:app", host="0.0.0.0", port=args.port, reload=True)

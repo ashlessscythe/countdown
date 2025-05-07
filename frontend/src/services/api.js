@@ -1,9 +1,9 @@
 import axios from "axios";
 
-// Create axios instance with base URL
+// Create axios instance with direct backend URL
 const api = axios.create({
-  baseURL: "/",
-  timeout: 10000,
+  baseURL: "http://localhost:8080/api",
+  timeout: 30000, // Increased timeout for large responses
   headers: {
     "Content-Type": "application/json",
   },
@@ -80,10 +80,9 @@ export const trackUserActivity = async (userId, activityType) => {
 
 // WebSocket connection for real-time updates
 export const connectWebSocket = (onMessage, onError) => {
-  // Determine the correct WebSocket URL based on the current location
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const host = window.location.host;
-  const wsUrl = `${protocol}//${host}/api/ws`;
+  // Connect directly to the backend WebSocket endpoint
+  // This bypasses the proxy for WebSocket connections
+  const wsUrl = "ws://localhost:8080/api/ws";
 
   const socket = new WebSocket(wsUrl);
 
