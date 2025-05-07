@@ -74,8 +74,27 @@ def read_zmdesnr_file(file_path=None):
         # Read the Excel file
         df = pd.read_excel(file_path)
         
+        # Log the original columns for debugging
+        logger.info(f"Original columns in ZMDESNR file: {df.columns.tolist()}")
+        
+        # Rename columns directly instead of creating new ones
+        column_mapping = {
+            'Serial #': 'serial_number',
+            'Created by': 'created_by',
+            'Created on': 'created_on',
+            'Delivery': 'delivery',
+            'Status': 'status',
+            'Warehouse Number': 'warehouse_number'
+        }
+        
+        # Rename columns that exist in the DataFrame
+        df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
+        
         # Sanitize headers
         df = sanitize_headers(df)
+        
+        # Log the columns after mapping and sanitizing
+        logger.info(f"Columns after mapping and sanitizing: {df.columns.tolist()}")
         
         # Filter for warehouse
         if 'warehouse_number' in df.columns:
@@ -89,11 +108,39 @@ def read_zmdesnr_file(file_path=None):
         if 'created_on' in df.columns and not pd.api.types.is_datetime64_any_dtype(df['created_on']):
             df['created_on'] = pd.to_datetime(df['created_on'], errors='coerce')
         
-        if 'time' in df.columns and isinstance(df['time'].iloc[0] if not df.empty else None, str):
-            df['scan_timestamp'] = pd.to_datetime(
-                df['created_on'].dt.strftime('%Y-%m-%d') + ' ' + df['time'], 
-                errors='coerce'
-            )
+        # Create scan_timestamp from time and created_on if they exist
+        if 'time' in df.columns and 'created_on' in df.columns:
+            try:
+                # Convert time to string if it's not already
+                if not pd.api.types.is_object_dtype(df['time']):
+                    # If time is a datetime.time object, convert to string
+                    df['time_str'] = df['time'].apply(lambda x: x.strftime('%H:%M:%S') if hasattr(x, 'strftime') else str(x))
+                else:
+                    df['time_str'] = df['time']
+                
+                # Create scan_timestamp by combining date from created_on and time_str
+                df['scan_timestamp'] = pd.to_datetime(
+                    df['created_on'].dt.strftime('%Y-%m-%d') + ' ' + df['time_str'], 
+                    errors='coerce'
+                )
+                
+                logger.info(f"Created scan_timestamp column from time and created_on")
+            except Exception as e:
+                logger.error(f"Error creating scan_timestamp: {str(e)}")
+                # Create a fallback scan_timestamp using just created_on
+                try:
+                    df['scan_timestamp'] = df['created_on']
+                    logger.info("Using created_on as fallback for scan_timestamp")
+                except Exception as e2:
+                    logger.error(f"Error creating fallback scan_timestamp: {str(e2)}")
+        
+        # Drop the first row if it's all NaN (header row)
+        if not df.empty and df.iloc[0].isna().all():
+            df = df.iloc[1:].reset_index(drop=True)
+            logger.info("Dropped header row with all NaN values")
+        
+        # Log the number of rows after processing
+        logger.info(f"ZMDESNR file processed: {len(df)} rows")
         
         return df
     
@@ -123,8 +170,32 @@ def read_vl06o_file(file_path=None):
         # Read the Excel file
         df = pd.read_excel(file_path)
         
+        # Log the original columns for debugging
+        logger.info(f"Original columns in VL06O file: {df.columns.tolist()}")
+        
+        # Rename columns directly instead of creating new ones
+        column_mapping = {
+            'Delivery': 'delivery',
+            'Number of packages': 'number_of_packages',
+            'Shipping Point/Receiving Pt': 'shipping_point'
+        }
+        
+        # Rename columns that exist in the DataFrame
+        df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
+        
         # Sanitize headers
         df = sanitize_headers(df)
+        
+        # Log the columns after mapping and sanitizing
+        logger.info(f"Columns after mapping and sanitizing: {df.columns.tolist()}")
+        
+        # Drop the first row if it's all NaN (header row)
+        if not df.empty and df.iloc[0].isna().all():
+            df = df.iloc[1:].reset_index(drop=True)
+            logger.info("Dropped header row with all NaN values")
+        
+        # Log the number of rows after processing
+        logger.info(f"VL06O file processed: {len(df)} rows")
         
         return df
     
@@ -143,15 +214,40 @@ def get_combined_data():
     serials_df = read_zmdesnr_file()
     deliveries_df = read_vl06o_file()
     
+    # Log the columns in each dataframe
+    logger.info(f"Serials DataFrame columns: {serials_df.columns.tolist()}")
+    logger.info(f"Deliveries DataFrame columns: {deliveries_df.columns.tolist()}")
+    
     if serials_df.empty or deliveries_df.empty:
         logger.warning("One or both dataframes are empty")
         return serials_df, deliveries_df, pd.DataFrame()
     
+    # Check for delivery column in both dataframes
+    delivery_col_serials = 'delivery' if 'delivery' in serials_df.columns else None
+    delivery_col_deliveries = 'delivery' if 'delivery' in deliveries_df.columns else None
+    
+    # If delivery column is missing in serials_df but we have 'Delivery', use that
+    if delivery_col_serials is None and 'Delivery' in serials_df.columns:
+        serials_df['delivery'] = serials_df['Delivery']
+        delivery_col_serials = 'delivery'
+        logger.info("Using 'Delivery' column from serials_df as 'delivery'")
+    
+    # If delivery column is missing in deliveries_df but we have 'Delivery', use that
+    if delivery_col_deliveries is None and 'Delivery' in deliveries_df.columns:
+        deliveries_df['delivery'] = deliveries_df['Delivery']
+        delivery_col_deliveries = 'delivery'
+        logger.info("Using 'Delivery' column from deliveries_df as 'delivery'")
+    
     # Ensure delivery column is of the same type in both dataframes
-    if 'delivery' in serials_df.columns and 'delivery' in deliveries_df.columns:
+    if delivery_col_serials and delivery_col_deliveries:
         # Convert to integers first to remove decimal points, then to strings
-        serials_df['delivery'] = serials_df['delivery'].fillna(0).astype(int).astype(str)
-        deliveries_df['delivery'] = deliveries_df['delivery'].fillna(0).astype(int).astype(str)
+        serials_df['delivery'] = serials_df[delivery_col_serials].fillna(0).astype(int).astype(str)
+        deliveries_df['delivery'] = deliveries_df[delivery_col_deliveries].fillna(0).astype(int).astype(str)
+        
+        # Ensure number_of_packages column exists in deliveries_df
+        if 'number_of_packages' not in deliveries_df.columns and 'Number of packages' in deliveries_df.columns:
+            deliveries_df['number_of_packages'] = deliveries_df['Number of packages']
+            logger.info("Using 'Number of packages' column as 'number_of_packages'")
         
         # Merge the dataframes on delivery
         combined_df = pd.merge(
@@ -162,9 +258,12 @@ def get_combined_data():
             suffixes=('_serial', '_delivery')
         )
         
+        # Log the number of rows in the combined dataframe
+        logger.info(f"Combined DataFrame: {len(combined_df)} rows")
+        
         return serials_df, deliveries_df, combined_df
     else:
-        logger.error("Delivery column missing in one or both dataframes")
+        logger.error(f"Delivery column missing in one or both dataframes. Serials columns: {serials_df.columns.tolist()}, Deliveries columns: {deliveries_df.columns.tolist()}")
         return serials_df, deliveries_df, pd.DataFrame()
 
 if __name__ == "__main__":

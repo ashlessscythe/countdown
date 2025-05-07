@@ -62,15 +62,86 @@ def get_scan_time_metrics(combined_df):
     Returns:
         pandas.DataFrame: DataFrame with scan time metrics
     """
-    if combined_df.empty or 'scan_timestamp' not in combined_df.columns:
-        logger.warning("scan_timestamp column not found, skipping scan time metrics")
+    if combined_df.empty:
+        logger.warning("Empty dataframe, skipping scan time metrics")
         return pd.DataFrame()
+    
+    # Check if we have the necessary columns
+    required_columns = ['created_by', 'time', 'created_on']
+    missing_columns = [col for col in required_columns if col not in combined_df.columns]
+    
+    if missing_columns:
+        logger.warning(f"Missing required columns for scan time metrics: {missing_columns}")
+        # Try to create scan_timestamp from time and created_on if they exist
+        if 'time' in combined_df.columns and 'created_on' in combined_df.columns:
+            try:
+                # Convert created_on to datetime if it's not already
+                if not pd.api.types.is_datetime64_any_dtype(combined_df['created_on']):
+                    combined_df['created_on'] = pd.to_datetime(combined_df['created_on'], errors='coerce')
+                
+                # Create scan_timestamp by combining date from created_on and time
+                combined_df['scan_timestamp'] = pd.to_datetime(
+                    combined_df['created_on'].dt.strftime('%Y-%m-%d') + ' ' + combined_df['time'], 
+                    errors='coerce'
+                )
+                logger.info("Created scan_timestamp from time and created_on columns")
+            except Exception as e:
+                logger.error(f"Error creating scan_timestamp: {str(e)}")
+                return pd.DataFrame()
+        else:
+            return pd.DataFrame()
+    
+    # Use scan_timestamp if it exists, otherwise try to create it
+    if 'scan_timestamp' not in combined_df.columns:
+        try:
+            # Convert created_on to datetime if it's not already
+            if not pd.api.types.is_datetime64_any_dtype(combined_df['created_on']):
+                combined_df['created_on'] = pd.to_datetime(combined_df['created_on'], errors='coerce')
+            
+            # Check if time_str exists (created in readers.py)
+            if 'time_str' in combined_df.columns:
+                # Create scan_timestamp by combining date from created_on and time_str
+                combined_df['scan_timestamp'] = pd.to_datetime(
+                    combined_df['created_on'].dt.strftime('%Y-%m-%d') + ' ' + combined_df['time_str'], 
+                    errors='coerce'
+                )
+                logger.info("Created scan_timestamp from time_str and created_on columns")
+            elif 'time' in combined_df.columns:
+                # Convert time to string if it's not already
+                if not pd.api.types.is_object_dtype(combined_df['time']):
+                    # If time is a datetime.time object, convert to string
+                    combined_df['time_str'] = combined_df['time'].apply(lambda x: x.strftime('%H:%M:%S') if hasattr(x, 'strftime') else str(x))
+                else:
+                    combined_df['time_str'] = combined_df['time']
+                
+                # Create scan_timestamp by combining date from created_on and time_str
+                combined_df['scan_timestamp'] = pd.to_datetime(
+                    combined_df['created_on'].dt.strftime('%Y-%m-%d') + ' ' + combined_df['time_str'], 
+                    errors='coerce'
+                )
+                logger.info("Created scan_timestamp from time and created_on columns")
+            else:
+                # Use created_on as fallback
+                combined_df['scan_timestamp'] = combined_df['created_on']
+                logger.info("Using created_on as scan_timestamp (no time column available)")
+        except Exception as e:
+            logger.error(f"Error creating scan_timestamp: {str(e)}")
+            # Use current time as a fallback
+            combined_df['scan_timestamp'] = datetime.now()
+            logger.warning("Using current time for all scan_timestamp values due to error")
     
     # Ensure scan_timestamp is datetime
     combined_df['scan_timestamp'] = pd.to_datetime(combined_df['scan_timestamp'], errors='coerce')
     
+    # Drop rows with missing scan_timestamp or created_by
+    valid_df = combined_df.dropna(subset=['scan_timestamp', 'created_by'])
+    
+    if valid_df.empty:
+        logger.warning("No valid scan data after filtering")
+        return pd.DataFrame()
+    
     # Sort by user and timestamp
-    sorted_df = combined_df.sort_values(['created_by', 'scan_timestamp'])
+    sorted_df = valid_df.sort_values(['created_by', 'scan_timestamp'])
     
     # Group by user
     user_groups = sorted_df.groupby('created_by')
@@ -80,6 +151,8 @@ def get_scan_time_metrics(combined_df):
     current_scans = []
     previous_scans = []
     time_differences = []
+    serials = []
+    statuses = []
     
     # Current time for reference
     now = datetime.now()
@@ -87,6 +160,11 @@ def get_scan_time_metrics(combined_df):
     for user, group in user_groups:
         # Get the latest scan for this user
         latest_scan = group['scan_timestamp'].max()
+        latest_row = group[group['scan_timestamp'] == latest_scan].iloc[0]
+        
+        # Get serial number and status if available
+        serial = str(latest_row.get('serial_number', '')) if 'serial_number' in latest_row else str(latest_row.get('Serial #', ''))
+        status = str(latest_row.get('status', '')) if 'status' in latest_row else ''
         
         # If we have at least two scans, get the previous one
         if len(group) > 1:
@@ -94,6 +172,7 @@ def get_scan_time_metrics(combined_df):
             previous_timestamps = group[group['scan_timestamp'] < latest_scan]['scan_timestamp']
             if not previous_timestamps.empty:
                 previous_scan = previous_timestamps.max()
+                previous_row = group[group['scan_timestamp'] == previous_scan].iloc[0]
                 time_diff = (latest_scan - previous_scan).total_seconds() / 60  # in minutes
             else:
                 previous_scan = pd.NaT
@@ -106,13 +185,17 @@ def get_scan_time_metrics(combined_df):
         current_scans.append(latest_scan)
         previous_scans.append(previous_scan)
         time_differences.append(time_diff)
+        serials.append(serial)
+        statuses.append(status)
     
     # Create DataFrame with results
     scan_metrics_df = pd.DataFrame({
         'user_id': users,
         'current_scan_time': current_scans,
         'previous_scan_time': previous_scans,
-        'time_between_scans_minutes': time_differences
+        'time_between_scans_minutes': time_differences,
+        'serial': serials,
+        'status': statuses
     })
     
     # Calculate time since last scan
@@ -133,22 +216,91 @@ def get_user_activity_metrics(combined_df, window_minutes=WINDOW_MINUTES):
     Returns:
         pandas.DataFrame: DataFrame with user activity metrics
     """
-    if combined_df.empty or 'scan_timestamp' not in combined_df.columns:
-        logger.warning("scan_timestamp column not found, skipping user activity metrics")
+    if combined_df.empty:
+        logger.warning("Empty dataframe, skipping user activity metrics")
         return pd.DataFrame()
+    
+    # Check if we have the necessary columns
+    if 'created_by' not in combined_df.columns:
+        logger.warning("created_by column not found, skipping user activity metrics")
+        return pd.DataFrame()
+    
+    # Use scan_timestamp if it exists, otherwise try to create it
+    if 'scan_timestamp' not in combined_df.columns:
+        try:
+            # Check if we have time_str and created_on columns
+            if 'time_str' in combined_df.columns and 'created_on' in combined_df.columns:
+                # Convert created_on to datetime if it's not already
+                if not pd.api.types.is_datetime64_any_dtype(combined_df['created_on']):
+                    combined_df['created_on'] = pd.to_datetime(combined_df['created_on'], errors='coerce')
+                
+                # Create scan_timestamp by combining date from created_on and time_str
+                combined_df['scan_timestamp'] = pd.to_datetime(
+                    combined_df['created_on'].dt.strftime('%Y-%m-%d') + ' ' + combined_df['time_str'], 
+                    errors='coerce'
+                )
+                logger.info("Created scan_timestamp from time_str and created_on columns")
+            elif 'time' in combined_df.columns and 'created_on' in combined_df.columns:
+                # Convert time to string if it's not already
+                if not pd.api.types.is_object_dtype(combined_df['time']):
+                    # If time is a datetime.time object, convert to string
+                    combined_df['time_str'] = combined_df['time'].apply(lambda x: x.strftime('%H:%M:%S') if hasattr(x, 'strftime') else str(x))
+                else:
+                    combined_df['time_str'] = combined_df['time']
+                
+                # Create scan_timestamp by combining date from created_on and time_str
+                combined_df['scan_timestamp'] = pd.to_datetime(
+                    combined_df['created_on'].dt.strftime('%Y-%m-%d') + ' ' + combined_df['time_str'], 
+                    errors='coerce'
+                )
+                logger.info("Created scan_timestamp from time and created_on columns")
+            else:
+                # If we don't have time and created_on, use created_on as scan_timestamp
+                if 'created_on' in combined_df.columns:
+                    combined_df['scan_timestamp'] = pd.to_datetime(combined_df['created_on'], errors='coerce')
+                    logger.info("Using created_on as scan_timestamp")
+                else:
+                    logger.warning("Cannot create scan_timestamp, no suitable columns found")
+                    # Use current time for all rows as a fallback
+                    combined_df['scan_timestamp'] = datetime.now()
+                    logger.warning("Using current time for all scan_timestamp values")
+        except Exception as e:
+            logger.error(f"Error creating scan_timestamp: {str(e)}")
+            # Use current time for all rows as a fallback
+            combined_df['scan_timestamp'] = datetime.now()
+            logger.warning("Using current time for all scan_timestamp values due to error")
     
     # Ensure scan_timestamp is datetime
     combined_df['scan_timestamp'] = pd.to_datetime(combined_df['scan_timestamp'], errors='coerce')
+    
+    # Drop rows with missing scan_timestamp or created_by
+    valid_df = combined_df.dropna(subset=['scan_timestamp', 'created_by'])
+    
+    if valid_df.empty:
+        logger.warning("No valid user data after filtering")
+        return pd.DataFrame()
     
     # Calculate the cutoff time for the window
     now = datetime.now()
     cutoff_time = now - timedelta(minutes=window_minutes)
     
     # Filter for scans within the window
-    recent_scans = combined_df[combined_df['scan_timestamp'] >= cutoff_time]
+    recent_scans = valid_df[valid_df['scan_timestamp'] >= cutoff_time]
     
     if recent_scans.empty:
-        return pd.DataFrame()
+        logger.warning("No recent scans within the time window")
+        # Return all users with minimal data instead of empty DataFrame
+        all_users = valid_df['created_by'].unique()
+        user_df = pd.DataFrame({
+            'created_by': all_users,
+            'scan_count': 0,
+            'first_scan': pd.NaT,
+            'last_scan': pd.NaT,
+            'unique_deliveries': 0,
+            'scans_per_hour': 0.0,
+            'minutes_since_last_scan': np.nan
+        })
+        return user_df
     
     # Group by user and calculate metrics
     user_metrics = recent_scans.groupby('created_by').agg({
@@ -173,6 +325,20 @@ def get_user_activity_metrics(combined_df, window_minutes=WINDOW_MINUTES):
     user_metrics['minutes_since_last_scan'] = (
         (now - user_metrics['last_scan']).dt.total_seconds() / 60
     ).round(2)
+    
+    # Add name column if available
+    if 'name' in combined_df.columns:
+        # Create a mapping of user IDs to names
+        name_map = {}
+        for user_id in user_metrics['created_by']:
+            user_rows = combined_df[combined_df['created_by'] == user_id]
+            if not user_rows.empty and not pd.isna(user_rows['name'].iloc[0]):
+                name_map[user_id] = user_rows['name'].iloc[0]
+            else:
+                name_map[user_id] = f"User {user_id}"
+        
+        # Add the name column
+        user_metrics['name'] = user_metrics['created_by'].map(name_map)
     
     return user_metrics
 
@@ -344,42 +510,69 @@ def prepare_dashboard_data(combined_df):
             'completed_deliveries': []
         }
     
+    # Make a copy to avoid modifying the original
+    df = combined_df.copy()
+    
+    # Standardize column names from Excel files
+    # Map common Excel column names to our expected column names
+    column_mapping = {
+        'Serial #': 'serial_number',
+        'Created by': 'created_by',
+        'Created on': 'created_on',
+        'Delivery': 'delivery',
+        'Status': 'status',
+        'Number of packages': 'number_of_packages'
+    }
+    
+    # Apply the mapping for columns that exist
+    for excel_col, std_col in column_mapping.items():
+        if excel_col in df.columns and std_col not in df.columns:
+            df[std_col] = df[excel_col]
+    
     # Preprocess serial data to handle cumulative snapshots
-    combined_df = preprocess_serial_data(combined_df)
+    df = preprocess_serial_data(df)
     
     # Map status codes to their descriptions
-    if 'status' in combined_df.columns:
-        combined_df['status_description'] = combined_df['status'].map(STATUS_MAPPING)
+    if 'status' in df.columns:
+        df['status_description'] = df['status'].map(STATUS_MAPPING)
     
     # Calculate progress metrics
-    progress_df = calculate_progress_metrics(combined_df)
+    progress_df = calculate_progress_metrics(df)
     
     # Get scan time metrics
-    scan_metrics_df = get_scan_time_metrics(combined_df)
+    scan_metrics_df = get_scan_time_metrics(df)
     
     # Get user activity metrics
-    user_metrics_df = get_user_activity_metrics(combined_df)
+    user_metrics_df = get_user_activity_metrics(df)
     
     # Track serial status changes
-    status_changes_df, new_serials_df, completed_deliveries_df = track_serial_status_changes(combined_df)
+    status_changes_df, new_serials_df, completed_deliveries_df = track_serial_status_changes(df)
     
     # Prepare serials data - ensure we only select columns that exist
     required_columns = ['serial_number', 'delivery', 'status', 'created_by']
-    optional_columns = ['scan_timestamp']
+    optional_columns = ['scan_timestamp', 'time', 'created_on']
     
     # Add optional columns if they exist
-    columns_to_select = required_columns + [col for col in optional_columns if col in combined_df.columns]
+    columns_to_select = [col for col in required_columns if col in df.columns] + \
+                        [col for col in optional_columns if col in df.columns]
     
-    serials_df = combined_df[columns_to_select].copy()
+    if columns_to_select:
+        serials_df = df[columns_to_select].copy()
+        
+        # Add status description if available
+        if 'status_description' in df.columns:
+            serials_df['status_description'] = df['status_description']
+    else:
+        serials_df = pd.DataFrame()
     
-    # Add status description if available
-    if 'status_description' in combined_df.columns:
-        serials_df['status_description'] = combined_df['status_description']
+    # Ensure user_metrics_df has user_id column (renamed from created_by)
+    if not user_metrics_df.empty and 'created_by' in user_metrics_df.columns:
+        user_metrics_df = user_metrics_df.rename(columns={'created_by': 'user_id'})
     
     # Combine user metrics with progress and scan times
     dashboard_data = {
         'users': user_metrics_df.to_dict(orient='records') if not user_metrics_df.empty else [],
-        'deliveries': combined_df[['delivery', 'number_of_packages']].drop_duplicates().to_dict(orient='records'),
+        'deliveries': df[['delivery', 'number_of_packages']].drop_duplicates().to_dict(orient='records') if 'delivery' in df.columns and 'number_of_packages' in df.columns else [],
         'progress': progress_df.to_dict(orient='records') if not progress_df.empty else [],
         'scan_times': scan_metrics_df.to_dict(orient='records') if not scan_metrics_df.empty else [],
         'serials': serials_df.to_dict(orient='records') if not serials_df.empty else [],
@@ -387,5 +580,9 @@ def prepare_dashboard_data(combined_df):
         'new_serials': new_serials_df.to_dict(orient='records') if not new_serials_df.empty else [],
         'completed_deliveries': completed_deliveries_df.to_dict(orient='records') if not completed_deliveries_df.empty else []
     }
+    
+    # Log the counts for each section
+    for section, data in dashboard_data.items():
+        logger.info(f"{section}: {len(data)} records")
     
     return dashboard_data

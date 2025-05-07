@@ -65,7 +65,12 @@ async def dashboard():
     """
     try:
         data = get_dashboard_data()
-        return JSONResponse(content=data)
+        # Ensure data is JSON serializable
+        if isinstance(data, dict) and data.any():
+            return JSONResponse(content=data)
+        else:
+            logger.warning("Dashboard data is empty or not a dictionary")
+            return JSONResponse(content={})
     except Exception as e:
         logger.error(f"Error retrieving dashboard data: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -83,7 +88,12 @@ async def users(active_only: bool = Query(False)):
     """
     try:
         data = get_user_activity(active_only)
-        return JSONResponse(content=data)
+        # Ensure data is JSON serializable
+        if isinstance(data, list) and data.any():
+            return JSONResponse(content=data)
+        else:
+            logger.warning("User activity data is not a list")
+            return JSONResponse(content=[])
     except Exception as e:
         logger.error(f"Error retrieving user activity data: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -102,7 +112,12 @@ async def progress(delivery_id: Optional[str] = None, user_id: Optional[str] = N
     """
     try:
         data = get_delivery_progress(delivery_id, user_id)
-        return JSONResponse(content=data)
+        # Ensure data is JSON serializable
+        if isinstance(data, list) and data.any():
+            return JSONResponse(content=data)
+        else:
+            logger.warning("Delivery progress data is not a list")
+            return JSONResponse(content=[])
     except Exception as e:
         logger.error(f"Error retrieving delivery progress data: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -120,7 +135,12 @@ async def scan_times(user_id: Optional[str] = None):
     """
     try:
         data = get_scan_times(user_id)
-        return JSONResponse(content=data)
+        # Ensure data is JSON serializable
+        if isinstance(data, list) and data.any():
+            return JSONResponse(content=data)
+        else:
+            logger.warning("Scan time data is not a list")
+            return JSONResponse(content=[])
     except Exception as e:
         logger.error(f"Error retrieving scan time data: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -153,15 +173,35 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         # Send initial data
         initial_data = get_dashboard_data()
-        await websocket.send_json({"type": "initial", "data": initial_data})
+        # Ensure data is JSON serializable
+        if isinstance(initial_data, dict) and initial_data.any():
+            await websocket.send_json({"type": "initial", "data": initial_data})
+        else:
+            logger.warning("Initial dashboard data is not a dictionary")
+            await websocket.send_json({"type": "initial", "data": {}})
         
         # Start sending real-time updates
         while True:
             # Get updates
             updates = get_real_time_updates()
             
+            # Check if updates is a dictionary and not empty
+            has_updates = False
+            if isinstance(updates, dict) and updates.any():
+                # Check if any value in the dictionary is truthy
+                for key, value in updates.items():
+                    # Handle numpy arrays or pandas Series
+                    if hasattr(value, 'any'):
+                        if value.any():
+                            has_updates = True
+                            break
+                    # Handle regular Python collections
+                    elif value:
+                        has_updates = True
+                        break
+            
             # Send updates if there are any
-            if updates:
+            if has_updates:
                 await websocket.send_json({"type": "update", "data": updates})
             
             # Wait for the next update interval
@@ -182,8 +222,24 @@ async def broadcast_updates():
             # Get updates
             updates = get_real_time_updates()
             
+            # Check if updates is a dictionary and not empty
+            has_updates = False
+            if isinstance(updates, dict) and updates.any():
+                # Check if any value in the dictionary is truthy
+                for key, value in updates.items():
+                    # Handle numpy arrays or pandas Series
+                    if hasattr(value, 'any'):
+                        if value.any():
+                            has_updates = True
+                            break
+                    # Handle regular Python collections
+                    elif value:
+                        has_updates = True
+                        break
+            
             # Broadcast updates if there are any and if there are active connections
-            if updates and manager.active_connections:
+            if has_updates and manager.active_connections:
+                # Ensure updates is JSON serializable
                 await manager.broadcast({"type": "update", "data": updates})
         except Exception as e:
             logger.error(f"Error broadcasting updates: {str(e)}")

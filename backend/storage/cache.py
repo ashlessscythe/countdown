@@ -8,6 +8,8 @@ import logging
 import threading
 from datetime import datetime
 import sys
+import pandas as pd
+import numpy as np
 
 # Add the project root to the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
@@ -67,18 +69,74 @@ class DashboardCache:
         except Exception as e:
             logger.error(f"Error loading cache: {str(e)}")
     
+    def _sanitize_for_json(self, data):
+        """
+        Sanitize data for JSON serialization, handling NaT values and other non-serializable types.
+        
+        Args:
+            data: Data to sanitize
+            
+        Returns:
+            Sanitized data that can be JSON serialized
+        """
+        if data is None:
+            return None
+        elif isinstance(data, (str, int, float, bool)):
+            return data
+        elif isinstance(data, (datetime,)):
+            return data.isoformat()
+        elif isinstance(data, pd.Series):
+            # Handle pandas Series by converting to a list and sanitizing each item
+            return [self._sanitize_for_json(item) for item in data.tolist()]
+        elif isinstance(data, pd.DataFrame):
+            # Handle pandas DataFrame by converting to records and sanitizing each record
+            return [self._sanitize_for_json(record) for record in data.to_dict(orient='records')]
+        elif isinstance(data, np.ndarray):
+            # Handle numpy arrays by converting to a list and sanitizing each item
+            return [self._sanitize_for_json(item) for item in data.tolist()]
+        elif pd.isna(data) or (hasattr(data, 'is_nan') and data.is_nan()):
+            return None
+        elif isinstance(data, dict):
+            return {k: self._sanitize_for_json(v) for k, v in data.items()}
+        elif isinstance(data, (list, tuple)):
+            return [self._sanitize_for_json(item) for item in data]
+        else:
+            # Convert anything else to string
+            try:
+                return str(data)
+            except:
+                return None
+    
     def _save_cache(self):
         """
         Save cache to disk.
         """
         try:
+            # Create a copy of the cache to sanitize
+            cache_copy = {}
+            for key, value in self._cache.items():
+                # Handle numpy arrays or pandas Series/DataFrames
+                if hasattr(value, 'any') or value.any():
+                    # Convert to list or dict before sanitizing
+                    if hasattr(value, 'to_dict'):
+                        # For pandas DataFrames
+                        cache_copy[key] = value.to_dict('records')
+                    else:
+                        # For numpy arrays or pandas Series
+                        cache_copy[key] = value.tolist()
+                else:
+                    cache_copy[key] = value
+            
+            # Sanitize the cache data to handle NaT values and other non-serializable types
+            sanitized_cache = self._sanitize_for_json(cache_copy)
+            
             cache_data = {
-                'data': self._cache,
+                'data': sanitized_cache,
                 'last_updated': self._last_updated
             }
             
             with open(self._cache_file, 'w') as f:
-                json.dump(cache_data, f, default=str, indent=2)
+                json.dump(cache_data, f, indent=2)
                 logger.info(f"Saved cache to {self._cache_file}")
         except Exception as e:
             logger.error(f"Error saving cache: {str(e)}")

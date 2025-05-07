@@ -195,10 +195,31 @@ def diff_dashboard_data(current_data, previous_data):
                     non_key_cols = [col for col in current_df.columns if col not in key_cols]
                     
                     for col in non_key_cols:
-                        if current_record[col].values[0] != previous_record[col].values[0]:
+                        # Get values safely
+                        current_val = current_record[col].values[0]
+                        previous_val = previous_record[col].values[0]
+                        
+                        # Handle pandas Series, arrays, and other complex types
+                        try:
+                            # For numpy arrays or pandas Series
+                            if hasattr(current_val, 'shape') and hasattr(previous_val, 'shape'):
+                                # Convert to list for comparison if they are arrays
+                                if hasattr(current_val, 'tolist') and hasattr(previous_val, 'tolist'):
+                                    is_different = current_val.tolist() != previous_val.tolist()
+                                else:
+                                    # Fall back to string comparison
+                                    is_different = str(current_val) != str(previous_val)
+                            else:
+                                # Direct comparison for simple types
+                                is_different = current_val != previous_val
+                        except Exception:
+                            # If comparison fails, use string representation
+                            is_different = str(current_val) != str(previous_val)
+                        
+                        if is_different:
                             changed_record = current_record.copy()
                             changed_record['_changed_column'] = col
-                            changed_record['_previous_value'] = previous_record[col].values[0]
+                            changed_record['_previous_value'] = str(previous_val)
                             changed_records.append(changed_record.to_dict('records')[0])
                             break
                 

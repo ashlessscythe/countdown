@@ -7,6 +7,7 @@ import os
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 import pandas as pd
+import numpy as np
 import json
 
 # Add the project root to the Python path
@@ -29,6 +30,44 @@ logger = logging.getLogger(__name__)
 
 # User activity tracking
 user_activity_log = {}
+
+def sanitize_for_json(data):
+    """
+    Sanitize data for JSON serialization, handling NaT values and other non-serializable types.
+    
+    Args:
+        data: Data to sanitize
+        
+    Returns:
+        Sanitized data that can be JSON serialized
+    """
+    if data is None:
+        return None
+    elif isinstance(data, (str, int, float, bool)):
+        return data
+    elif isinstance(data, (datetime,)):
+        return data.isoformat()
+    elif isinstance(data, pd.Series):
+        # Handle pandas Series by converting to a list and sanitizing each item
+        return [sanitize_for_json(item) for item in data.tolist()]
+    elif isinstance(data, pd.DataFrame):
+        # Handle pandas DataFrame by converting to records and sanitizing each record
+        return [sanitize_for_json(record) for record in data.to_dict(orient='records')]
+    elif isinstance(data, np.ndarray):
+        # Handle numpy arrays by converting to a list and sanitizing each item
+        return [sanitize_for_json(item) for item in data.tolist()]
+    elif pd.isna(data) or (hasattr(data, 'is_nan') and data.is_nan()):
+        return None
+    elif isinstance(data, dict):
+        return {k: sanitize_for_json(v) for k, v in data.items()}
+    elif isinstance(data, (list, tuple)):
+        return [sanitize_for_json(item) for item in data]
+    else:
+        # Convert anything else to string
+        try:
+            return str(data)
+        except:
+            return None
 
 def get_dashboard_data() -> Dict[str, Any]:
     """
@@ -56,7 +95,10 @@ def get_dashboard_data() -> Dict[str, Any]:
     # Add timestamp
     data["timestamp"] = datetime.now().isoformat()
     
-    return data
+    # Sanitize data for JSON serialization
+    sanitized_data = sanitize_for_json(data)
+    
+    return sanitized_data
 
 def get_user_activity(active_only: bool = False) -> List[Dict[str, Any]]:
     """
@@ -92,9 +134,13 @@ def get_user_activity(active_only: bool = False) -> List[Dict[str, Any]]:
                     # If we can't parse the timestamp, skip this user
                     pass
         
-        return active_users
+        # Sanitize data for JSON serialization
+        sanitized_data = sanitize_for_json(active_users)
+        return sanitized_data
     
-    return users_data
+    # Sanitize data for JSON serialization
+    sanitized_data = sanitize_for_json(users_data)
+    return sanitized_data
 
 def get_delivery_progress(delivery_id: Optional[str] = None, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """
@@ -123,7 +169,9 @@ def get_delivery_progress(delivery_id: Optional[str] = None, user_id: Optional[s
     if user_id:
         filtered_data = [item for item in filtered_data if str(item.get('created_by', '')) == user_id]
     
-    return filtered_data
+    # Sanitize data for JSON serialization
+    sanitized_data = sanitize_for_json(filtered_data)
+    return sanitized_data
 
 def get_scan_times(user_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """
@@ -145,9 +193,12 @@ def get_scan_times(user_id: Optional[str] = None) -> List[Dict[str, Any]]:
     # Apply filter
     if user_id:
         filtered_data = [item for item in scan_times_data if str(item.get('user_id', '')) == user_id]
-        return filtered_data
+        sanitized_data = sanitize_for_json(filtered_data)
+        return sanitized_data
     
-    return scan_times_data
+    # Sanitize data for JSON serialization
+    sanitized_data = sanitize_for_json(scan_times_data)
+    return sanitized_data
 
 def track_user_activity(user_id: str, activity_type: str) -> None:
     """
@@ -208,7 +259,9 @@ def get_real_time_updates() -> Dict[str, Any]:
         'updates': diff
     }
     
-    return updates
+    # Sanitize data for JSON serialization
+    sanitized_updates = sanitize_for_json(updates)
+    return sanitized_updates
 
 def get_user_activity_history(user_id: str, limit: int = 20) -> List[Dict[str, Any]]:
     """
@@ -227,8 +280,12 @@ def get_user_activity_history(user_id: str, limit: int = 20) -> List[Dict[str, A
     # Get the user's activity log
     activities = user_activity_log[user_id]
     
-    # Return the most recent activities up to the limit
-    return activities[-limit:]
+    # Get the most recent activities up to the limit
+    recent_activities = activities[-limit:]
+    
+    # Sanitize data for JSON serialization
+    sanitized_activities = sanitize_for_json(recent_activities)
+    return sanitized_activities
 
 def calculate_user_metrics() -> Dict[str, Any]:
     """
@@ -269,4 +326,6 @@ def calculate_user_metrics() -> Dict[str, Any]:
             'minutes_since_last_activity': round(time_since_last, 2)
         }
     
-    return metrics
+    # Sanitize data for JSON serialization
+    sanitized_metrics = sanitize_for_json(metrics)
+    return sanitized_metrics
