@@ -100,7 +100,7 @@ def check_config():
         logging.info("✓ config.py imported successfully")
         
         # Check required config variables
-        required_vars = ['BASE_DIR', 'SERIAL_NUMBERS_DIR', 'DELIVERY_INFO_DIR', 'OUT_DIR', 'WAREHOUSE_FILTER', 'STATUS_MAPPING', 'INTERVAL']
+        required_vars = ['BASE_DIR', 'SERIAL_NUMBERS_DIR', 'DELIVERY_INFO_DIR', 'OUT_DIR', 'WAREHOUSE_FILTER', 'STATUS_MAPPING', 'INTERVAL_SECONDS', 'WINDOW_MINUTES']
         missing_vars = [var for var in required_vars if not hasattr(config, var)]
         
         if missing_vars:

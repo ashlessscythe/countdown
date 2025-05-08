@@ -19,6 +19,7 @@ import time
 import logging
 from pathlib import Path
 import pandas as pd
+import numpy as np
 import config
 
 def get_latest_file(directory, pattern="*.xlsx"):
@@ -36,6 +37,115 @@ def get_latest_file(directory, pattern="*.xlsx"):
     if not files:
         return None
     return max(files, key=lambda f: f.stat().st_mtime)
+
+def sanitize_delivery_number(delivery):
+    """
+    Sanitize delivery number to ensure consistent format.
+    
+    Args:
+        delivery: Delivery number (could be int, float, or string)
+        
+    Returns:
+        str: Sanitized delivery number as string without decimal part
+    """
+    if pd.isna(delivery):
+        return None
+    
+    # Convert to string and remove any decimal part
+    delivery_str = str(delivery).split('.')[0]
+    return delivery_str
+
+def calculate_time_metrics(df_serial):
+    """
+    Calculate time between scans metrics for each user.
+    
+    Args:
+        df_serial (DataFrame): DataFrame containing serial scan data with timestamps
+        
+    Returns:
+        DataFrame: DataFrame with time metrics grouped by user
+    """
+    # Print the head of the dataframe to see column types
+    logging.info("Serial data columns and types:")
+    for col in df_serial.columns:
+        logging.info(f"{col}: {df_serial[col].dtype}")
+    
+    # Create a timestamp column if it doesn't exist by combining 'Created on' and 'Time'
+    if 'Timestamp' not in df_serial.columns:
+        if 'Created on' in df_serial.columns and 'Time' in df_serial.columns:
+            logging.info("Creating Timestamp column from 'Created on' and 'Time' columns")
+            
+            # First ensure both columns are strings
+            created_on_str = df_serial['Created on'].astype(str)
+            time_str = df_serial['Time'].astype(str)
+            
+            # Combine date and time columns to create a timestamp
+            df_serial['Timestamp'] = created_on_str + ' ' + time_str
+            
+            logging.info(f"Sample timestamp values: {df_serial['Timestamp'].head(3).tolist()}")
+        else:
+            logging.warning("Cannot create timestamp: 'Created on' or 'Time' columns missing")
+            return pd.DataFrame()
+    
+    # Convert timestamp to datetime if it's not already
+    try:
+        df_serial['Timestamp'] = pd.to_datetime(df_serial['Timestamp'])
+        logging.info(f"Converted timestamps to datetime. Sample: {df_serial['Timestamp'].head(3)}")
+    except Exception as e:
+        logging.error(f"Error converting timestamp to datetime: {e}")
+        return pd.DataFrame()
+    
+    # Sort by user and timestamp
+    df_sorted = df_serial.sort_values(['Created by', 'Timestamp'])
+    
+    # Group by user to calculate time differences between consecutive scans
+    time_metrics = []
+    
+    for user, group in df_sorted.groupby('Created by'):
+        # Skip if user has less than 2 scans
+        if len(group) < 2:
+            continue
+            
+        # Calculate time differences between consecutive scans
+        group = group.sort_values('Timestamp')
+        time_diffs = group['Timestamp'].diff().dropna()
+        
+        # Convert time differences to seconds
+        time_diffs_seconds = time_diffs.dt.total_seconds()
+        
+        # Calculate metrics
+        avg_time_between_scans = time_diffs_seconds.mean()
+        last_scan_time = group['Timestamp'].max()
+        time_since_last_scan = (pd.Timestamp.now() - last_scan_time).total_seconds()
+        
+        # Create a list of all time differences for this user
+        time_diff_list = time_diffs_seconds.tolist()
+        
+        # Add to results
+        time_metrics.append({
+            'user': user,
+            'avg_time_between_scans': avg_time_between_scans,
+            'time_since_last_scan': time_since_last_scan,
+            'last_scan_time': last_scan_time,
+            'time_diff_list': time_diff_list,
+            'scan_count': len(group)
+        })
+    
+    # Convert to DataFrame
+    if time_metrics:
+        df_time_metrics = pd.DataFrame(time_metrics)
+        
+        # Convert seconds to minutes for readability
+        df_time_metrics['avg_time_between_scans_minutes'] = df_time_metrics['avg_time_between_scans'] / 60
+        df_time_metrics['time_since_last_scan_minutes'] = df_time_metrics['time_since_last_scan'] / 60
+        
+        # Round to 2 decimal places
+        df_time_metrics['avg_time_between_scans_minutes'] = df_time_metrics['avg_time_between_scans_minutes'].round(2)
+        df_time_metrics['time_since_last_scan_minutes'] = df_time_metrics['time_since_last_scan_minutes'].round(2)
+        
+        return df_time_metrics
+    else:
+        return pd.DataFrame()
 
 def process_snapshot():
     """
@@ -66,6 +176,9 @@ def process_snapshot():
     # 3. Filter warehouse and clean status data
     df_serial = df_serial[df_serial['Warehouse Number'] == config.WAREHOUSE_FILTER]
     
+    # Filter to only include serials with Pallet=1
+    df_serial = df_serial[df_serial['Pallet'] == 1]
+    
     # Map status codes to text
     df_serial['StatusText'] = df_serial['Status'].map(config.STATUS_MAPPING)
     
@@ -75,19 +188,13 @@ def process_snapshot():
     df_serial = df_serial[~((df_serial['Serial #'].isin(shipped_serials)) & 
                            (df_serial['Status'] == 'ASH'))]
 
-    # 4. Aggregate scanned packages by user and delivery
-    # First, collapse to one record per pallet (package)
-    df_pallets = df_serial.groupby(['Created by', 'Delivery', 'Pallet']).agg({
-        'StatusText': 'first'  # Take the status of the first serial in the pallet
-    }).reset_index()
+    # 4. Create a base aggregation by user and delivery
+    agg = df_serial.groupby(['Created by', 'Delivery']).size().reset_index(name='total_records')
     
-    # Count unique pallets per user-delivery (scanned packages)
-    agg = df_pallets.groupby(['Created by', 'Delivery']).agg(
-        scanned_packages=('Pallet', 'count')
-    ).reset_index()
+    # Get status breakdown (shipped vs picked counts)
+    # This gives us counts by status for each user-delivery combination
+    status_counts = df_serial.groupby(['Created by', 'Delivery', 'StatusText']).size().unstack(fill_value=0)
     
-    # Get status breakdown (picked vs shipped counts)
-    status_counts = df_pallets.groupby(['Created by', 'Delivery', 'StatusText']).size().unstack(fill_value=0)
     # Ensure both status columns exist, even if no data
     for status in config.STATUS_MAPPING.values():
         if status not in status_counts.columns:
@@ -101,52 +208,52 @@ def process_snapshot():
     agg = agg.merge(status_counts, on=['Created by', 'Delivery'], how='left')
     agg = agg.fillna(0)  # Fill NaN values with 0 for status counts
     
-    # 5. Add total delivery packages from VL06O
-    # Ensure delivery numbers are treated as strings to avoid type mismatches
-    df_delivery['Delivery'] = df_delivery['Delivery'].astype(str)
-    agg['Delivery'] = agg['Delivery'].astype(str)
+    # Drop the total_records column as it's not needed
+    agg = agg.drop('total_records', axis=1)
     
-    # Merge delivery totals
-    agg = agg.merge(df_delivery[['Delivery', 'Number of packages']], 
-                   on='Delivery', how='left')
+    # 5. Add total delivery packages from VL06O
+    # Sanitize delivery numbers in both dataframes to ensure consistent format
+    agg['delivery_clean'] = agg['Delivery'].apply(sanitize_delivery_number)
+    df_delivery['delivery_clean'] = df_delivery['Delivery'].apply(sanitize_delivery_number)
+    
+    # Merge delivery totals using the sanitized delivery numbers
+    agg = agg.merge(df_delivery[['delivery_clean', 'Number of packages']], 
+                   on='delivery_clean', how='left')
     agg = agg.rename(columns={'Number of packages': 'delivery_total_packages'})
     
-    # 6. Calculate time metrics per user
-    # Convert date and time columns to a single timestamp
-    df_serial['Timestamp'] = pd.to_datetime(df_serial['Created on'] + ' ' + df_serial['Time'])
+    # Drop the temporary column used for merging
+    agg = agg.drop('delivery_clean', axis=1)
     
-    # Get timestamps for each user's scans, sorted chronologically
-    user_timestamps = df_serial.sort_values('Timestamp').groupby('Created by')['Timestamp'].agg(list)
+    # 6. Calculate progress metrics
+    # For progress calculation, consider both picked and shipped items as "scanned"
+    # If all items are shipped, progress should be 100%
+    agg['scanned_packages'] = agg['picked_count'] + agg['shipped_closed_count']
     
-    # Calculate time metrics for each user
-    user_metrics = []
-    for user, timestamps in user_timestamps.items():
-        if not timestamps:
-            continue
-            
-        last_time = timestamps[-1]
-        prev_time = timestamps[-2] if len(timestamps) > 1 else None
-        
-        time_since_last = pd.Timestamp.now() - last_time
-        time_between = (last_time - prev_time) if prev_time else pd.Timedelta(0)
-        
-        user_metrics.append({
-            'Created by': user,
-            'last_scan_time': last_time,
-            'time_since_last_scan': time_since_last,
-            'time_between_scans': time_between
-        })
+    # Calculate progress percentage
+    # Only calculate where delivery_total_packages is not null
+    agg['progress_percentage'] = 0.0  # Default to 0
+    mask = ~agg['delivery_total_packages'].isna()
     
-    # Convert to DataFrame and merge with aggregated data
-    if user_metrics:
-        user_metrics_df = pd.DataFrame(user_metrics)
-        agg = agg.merge(user_metrics_df, on='Created by', how='left')
+    # Calculate progress percentage based on scanned packages vs total packages
+    agg.loc[mask, 'progress_percentage'] = (agg.loc[mask, 'scanned_packages'] / 
+                                           agg.loc[mask, 'delivery_total_packages']) * 100
     
-    # 7. Rename columns for final output
+    # If all items are shipped, set progress to 100%
+    all_shipped_mask = (agg['shipped_closed_count'] > 0) & (agg['picked_count'] == 0)
+    agg.loc[all_shipped_mask, 'progress_percentage'] = 100.0
+    
+    # Round percentage to 2 decimal places
+    agg['progress_percentage'] = agg['progress_percentage'].round(2)
+    
+    # 7. Calculate time metrics for users
+    # This creates a separate dataframe with time between scans data
+    time_metrics_df = calculate_time_metrics(df_serial)
+    
+    # 8. Rename columns for final output
     agg = agg.rename(columns={'Created by': 'user', 'Delivery': 'delivery'})
     
-    # 8. Compare with previous output to detect changes
-    latest_out = get_latest_file(config.OUT_DIR, "*.parquet")
+    # 9. Compare with previous output to detect changes
+    latest_out = get_latest_file(config.OUT_DIR, "output_*.parquet")
     changed = True
     
     if latest_out:
@@ -154,12 +261,13 @@ def process_snapshot():
             prev_df = pd.read_parquet(latest_out)
             
             # Compare relevant columns (excluding time-based ones which will always change)
-            compare_cols = [col for col in agg.columns if not any(
+            # Get columns that exist in both dataframes
+            common_cols = [col for col in agg.columns if col in prev_df.columns and not any(
                 time_col in col for time_col in ['time_', 'last_scan'])]
             
             # Sort both DataFrames for stable comparison
-            prev_df_sorted = prev_df[compare_cols].sort_values(['user', 'delivery']).reset_index(drop=True)
-            new_df_sorted = agg[compare_cols].sort_values(['user', 'delivery']).reset_index(drop=True)
+            prev_df_sorted = prev_df[common_cols].sort_values(['user', 'delivery']).reset_index(drop=True)
+            new_df_sorted = agg[common_cols].sort_values(['user', 'delivery']).reset_index(drop=True)
             
             if new_df_sorted.equals(prev_df_sorted):
                 changed = False
@@ -167,7 +275,7 @@ def process_snapshot():
         except Exception as e:
             logging.error(f"Error comparing with previous output: {e}")
     
-    # 9. Write new output if changes detected
+    # 10. Write new output if changes detected
     if changed:
         # Ensure output directory exists
         Path(config.OUT_DIR).mkdir(exist_ok=True)
@@ -175,12 +283,18 @@ def process_snapshot():
         # Generate timestamped filename
         timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
         out_path = Path(config.OUT_DIR) / f"output_{timestamp}.parquet"
+        time_metrics_path = Path(config.OUT_DIR) / f"time_metrics_{timestamp}.parquet"
         
         # Write to Parquet
         agg.to_parquet(out_path)
         logging.info(f"Wrote output file: {out_path}")
         
-        # 10. Cleanup old outputs (keep last 5)
+        # Write time metrics to a separate Parquet file if we have data
+        if not time_metrics_df.empty:
+            time_metrics_df.to_parquet(time_metrics_path)
+            logging.info(f"Wrote time metrics file: {time_metrics_path}")
+        
+        # 11. Cleanup old outputs (keep last 5)
         outputs = sorted(Path(config.OUT_DIR).glob("output_*.parquet"), 
                         key=lambda f: f.stat().st_mtime, reverse=True)
         
@@ -188,6 +302,17 @@ def process_snapshot():
             try:
                 old_file.unlink()
                 logging.info(f"Removed old output file: {old_file.name}")
+            except Exception as e:
+                logging.warning(f"Failed to remove {old_file.name}: {e}")
+                
+        # Also cleanup old time metrics files (keep last 5)
+        time_metrics_files = sorted(Path(config.OUT_DIR).glob("time_metrics_*.parquet"), 
+                                  key=lambda f: f.stat().st_mtime, reverse=True)
+        
+        for old_file in time_metrics_files[5:]:
+            try:
+                old_file.unlink()
+                logging.info(f"Removed old time metrics file: {old_file.name}")
             except Exception as e:
                 logging.warning(f"Failed to remove {old_file.name}: {e}")
     else:
@@ -216,8 +341,8 @@ def main():
         except Exception as e:
             logging.exception("Unexpected error in processing cycle")
         
-        logging.info(f"Sleeping for {config.INTERVAL} seconds...")
-        time.sleep(config.INTERVAL)
+        logging.info(f"Sleeping for {config.INTERVAL_SECONDS} seconds...")
+        time.sleep(config.INTERVAL_SECONDS)
 
 if __name__ == "__main__":
     main()

@@ -48,10 +48,36 @@ def generate_serial_data(num_records=100):
     
     # Generate data
     data = []
+    
+    # Create a dictionary to track the last scan time for each user
+    # This helps create realistic time patterns between scans
+    user_last_scan = {user: base_date for user in users}
+    
     for i in range(num_records):
-        # Random timestamp between base_date and now
-        random_seconds = random.randint(0, int((now - base_date).total_seconds()))
-        timestamp = base_date + timedelta(seconds=random_seconds)
+        # Select a random user
+        user = random.choice(users)
+        
+        # Get the last scan time for this user
+        last_scan = user_last_scan[user]
+        
+        # Generate a timestamp that's after the last scan (between 1 minute and 2 hours later)
+        # This creates more realistic scanning patterns
+        min_seconds = 60  # minimum 1 minute between scans
+        max_seconds = 7200  # maximum 2 hours between scans
+        
+        # For some users, create tighter scan patterns (more frequent scans)
+        if user in ['USER001', 'USER003']:
+            max_seconds = 900  # 15 minutes max for these users
+        
+        random_seconds = random.randint(min_seconds, max_seconds)
+        timestamp = last_scan + timedelta(seconds=random_seconds)
+        
+        # Make sure the timestamp isn't in the future
+        if timestamp > now:
+            timestamp = now - timedelta(minutes=random.randint(5, 30))
+        
+        # Update the last scan time for this user
+        user_last_scan[user] = timestamp
         
         # Format date and time separately
         created_date = timestamp.strftime('%Y-%m-%d')
@@ -59,17 +85,24 @@ def generate_serial_data(num_records=100):
         
         record = {
             'Serial #': serials[i],
-            'Pallet': random.choice(pallets),
+            'Pallet': random.choice([1, 2, 3]),  # Using numeric values for Pallet
             'Delivery': random.choice(deliveries),
             'Status': random.choice(statuses),
             'Warehouse Number': warehouse,
-            'Created by': random.choice(users),
+            'Created by': user,
             'Created on': created_date,
-            'Time': created_time
+            'Time': created_time,
+            'Timestamp': timestamp  # Add a proper timestamp column
         }
         data.append(record)
     
-    return pd.DataFrame(data)
+    # Create DataFrame
+    df = pd.DataFrame(data)
+    
+    # Sort by timestamp to simulate chronological snapshots
+    df = df.sort_values('Timestamp')
+    
+    return df
 
 def generate_delivery_data(deliveries):
     """
