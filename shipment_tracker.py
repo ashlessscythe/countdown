@@ -55,12 +55,14 @@ def sanitize_delivery_number(delivery):
     delivery_str = str(delivery).split('.')[0]
     return delivery_str
 
-def calculate_time_metrics(df_serial):
+def calculate_time_metrics(df_serial, reference_time=None):
     """
     Calculate time between scans metrics for each user.
     
     Args:
         df_serial (DataFrame): DataFrame containing serial scan data with timestamps
+        reference_time (datetime, optional): Reference time to use for calculations.
+            If None, current system time will be used.
         
     Returns:
         DataFrame: DataFrame with time metrics grouped by user
@@ -101,6 +103,14 @@ def calculate_time_metrics(df_serial):
     # Group by user to calculate time differences between consecutive scans
     time_metrics = []
     
+    # Get reference time for calculations - ensure it's timezone-naive for consistent comparison
+    if reference_time is None:
+        now = pd.Timestamp.now().replace(tzinfo=None)
+        logging.info(f"Using current system time for calculations: {now}")
+    else:
+        now = reference_time.replace(tzinfo=None)
+        logging.info(f"Using reference time from filename for calculations: {now}")
+    
     for user, group in df_sorted.groupby('Created by'):
         # Skip if user has less than 2 scans
         if len(group) < 2:
@@ -108,6 +118,11 @@ def calculate_time_metrics(df_serial):
             
         # Calculate time differences between consecutive scans
         group = group.sort_values('Timestamp')
+        
+        # Ensure timestamps are timezone-naive for consistent comparison
+        if group['Timestamp'].iloc[0].tzinfo is not None:
+            group['Timestamp'] = group['Timestamp'].dt.tz_localize(None)
+            
         time_diffs = group['Timestamp'].diff().dropna()
         
         # Convert time differences to seconds
@@ -116,7 +131,25 @@ def calculate_time_metrics(df_serial):
         # Calculate metrics
         avg_time_between_scans = time_diffs_seconds.mean()
         last_scan_time = group['Timestamp'].max()
-        time_since_last_scan = (pd.Timestamp.now() - last_scan_time).total_seconds()
+        
+        # Ensure last_scan_time is timezone-naive for comparison with now
+        if last_scan_time.tzinfo is not None:
+            last_scan_time = last_scan_time.replace(tzinfo=None)
+            
+        # Log the last scan time for debugging
+        logging.info(f"User {user} - Last scan time: {last_scan_time}")
+        
+        # Calculate time since last scan, ensuring it's not negative
+        time_since_last_scan = (now - last_scan_time).total_seconds()
+        
+        # If time_since_last_scan is negative, it means the last scan time is in the future
+        # This could be due to clock synchronization issues or timezone problems
+        # In this case, set time_since_last_scan to 0 to avoid negative values
+        if time_since_last_scan < 0:
+            logging.warning(f"Negative time since last scan detected for user {user}. "
+                           f"Last scan time: {last_scan_time}, Current time: {now}. "
+                           f"Setting time_since_last_scan to 0.")
+            time_since_last_scan = 0
         
         # Create a list of all time differences for this user
         time_diff_list = time_diffs_seconds.tolist()
@@ -147,6 +180,31 @@ def calculate_time_metrics(df_serial):
     else:
         return pd.DataFrame()
 
+def extract_timestamp_from_filename(filename):
+    """
+    Extract timestamp from filename in format YYYYMMDDHHMMSS.
+    
+    Args:
+        filename (str): Filename containing timestamp
+        
+    Returns:
+        datetime: Extracted timestamp as datetime object, or None if not found
+    """
+    import re
+    
+    # Try to extract a timestamp pattern (8 digits for date + 6 digits for time)
+    match = re.search(r'(\d{8})(\d{6})', filename)
+    if match:
+        date_str, time_str = match.groups()
+        try:
+            # Parse the timestamp
+            timestamp_str = f"{date_str}_{time_str}"
+            return pd.to_datetime(timestamp_str, format="%Y%m%d_%H%M%S")
+        except Exception as e:
+            logging.error(f"Error parsing timestamp from filename {filename}: {e}")
+    
+    return None
+
 def process_snapshot():
     """
     Process one cycle of snapshot data:
@@ -164,6 +222,22 @@ def process_snapshot():
         return
 
     logging.info(f"Processing files: {serial_file.name} and {delivery_file.name}")
+    
+    # Extract timestamp from filenames to use as reference time
+    serial_timestamp = extract_timestamp_from_filename(serial_file.name)
+    delivery_timestamp = extract_timestamp_from_filename(delivery_file.name)
+    
+    # Use the most recent timestamp as the reference time
+    reference_time = None
+    if serial_timestamp and delivery_timestamp:
+        reference_time = max(serial_timestamp, delivery_timestamp)
+        logging.info(f"Using reference time from filenames: {reference_time}")
+    elif serial_timestamp:
+        reference_time = serial_timestamp
+        logging.info(f"Using reference time from serial file: {reference_time}")
+    elif delivery_timestamp:
+        reference_time = delivery_timestamp
+        logging.info(f"Using reference time from delivery file: {reference_time}")
 
     # 2. Read Excel files
     try:
@@ -178,6 +252,26 @@ def process_snapshot():
     
     # Filter to only include serials with Pallet=1
     df_serial = df_serial[df_serial['Pallet'] == 1]
+    
+    # Filter serials based on the time window defined by WINDOW_MINUTES
+    # First ensure we have a Timestamp column
+    if 'Timestamp' not in df_serial.columns:
+        if 'Created on' in df_serial.columns and 'Time' in df_serial.columns:
+            # Convert 'Created on' and 'Time' to a timestamp
+            created_on_str = df_serial['Created on'].astype(str)
+            time_str = df_serial['Time'].astype(str)
+            df_serial['Timestamp'] = created_on_str + ' ' + time_str
+            df_serial['Timestamp'] = pd.to_datetime(df_serial['Timestamp'])
+        else:
+            logging.warning("Cannot filter by time window: 'Created on' or 'Time' columns missing")
+    
+    # If we have a Timestamp column, filter based on WINDOW_MINUTES
+    if 'Timestamp' in df_serial.columns:
+        # Calculate the cutoff time (current time minus WINDOW_MINUTES)
+        cutoff_time = pd.Timestamp.now() - pd.Timedelta(minutes=config.WINDOW_MINUTES)
+        # Filter to only include records within the time window
+        df_serial = df_serial[df_serial['Timestamp'] >= cutoff_time]
+        logging.info(f"Filtered serial data to only include records within the last {config.WINDOW_MINUTES} minutes")
     
     # Map status codes to text
     df_serial['StatusText'] = df_serial['Status'].map(config.STATUS_MAPPING)
@@ -247,7 +341,7 @@ def process_snapshot():
     
     # 7. Calculate time metrics for users
     # This creates a separate dataframe with time between scans data
-    time_metrics_df = calculate_time_metrics(df_serial)
+    time_metrics_df = calculate_time_metrics(df_serial, reference_time)
     
     # 8. Rename columns for final output
     agg = agg.rename(columns={'Created by': 'user', 'Delivery': 'delivery'})

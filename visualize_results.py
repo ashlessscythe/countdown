@@ -40,7 +40,7 @@ def create_visualizations(df):
         return
     
     # Create output directory for visualizations
-    viz_dir = Path("visualizations")
+    viz_dir = Path(config.VIZ_DIR)
     viz_dir.mkdir(exist_ok=True)
     
     # 1. Packages scanned per user
@@ -129,7 +129,7 @@ def create_time_metrics_visualizations(df_time):
         return
     
     # Create output directory for visualizations
-    viz_dir = Path("visualizations")
+    viz_dir = Path(config.VIZ_DIR)
     viz_dir.mkdir(exist_ok=True)
     
     # 1. Average time between scans per user (in minutes)
