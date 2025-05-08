@@ -37,6 +37,3 @@ STATUS_MAPPING = {
     "ASH": "picked",
     "SHP": "shipped / closed"
 }
-
-# Frontend settings
-FRONTEND_UPDATE_INTERVAL = 10  # Update frontend every 10 seconds

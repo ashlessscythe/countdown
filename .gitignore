@@ -1,4 +1,35 @@
 # Python bytecode
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Log files
+*.log
+
+# Generated data
+*.xlsx
+*.parquet
+visualizations/
+
+# Output directories
+parquet_output/
 __pycache__/
 *.py[cod]
 *$py.class
@@ -35,4 +66,3 @@ config.py
 
 # OS specific files
 .DS_Store
-Thumbs.db
