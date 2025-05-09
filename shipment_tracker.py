@@ -250,8 +250,8 @@ def process_snapshot():
     # 3. Filter warehouse and clean status data
     df_serial = df_serial[df_serial['Warehouse Number'] == config.WAREHOUSE_FILTER]
     
-    # Filter to only include serials with Pallet=1
-    df_serial = df_serial[df_serial['Pallet'] == 1]
+    # Filter to only include serials with no parent serial number (pallet = 1 will be included)
+    df_serial = df_serial[df_serial['Parent serial number'].isna() | (df_serial['Parent serial number'] == '')]
     
     # Filter serials based on the time window defined by WINDOW_MINUTES
     # First ensure we have a Timestamp column
