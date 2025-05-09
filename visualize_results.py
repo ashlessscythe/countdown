@@ -226,6 +226,147 @@ def create_time_metrics_visualizations(df_time):
     
     print(f"Time metrics visualizations saved to {viz_dir.absolute()}")
 
+def create_delivery_completion_visualization(df):
+    """
+    Create visualization showing delivery completion by package count.
+    Shows deliveries with most recent activity and displays raw counts (e.g., "30 of 45 packages scanned").
+    
+    Args:
+        df (DataFrame): DataFrame containing the aggregated shipment data
+    """
+    if df is None or len(df) == 0:
+        print("No data to visualize delivery completion.")
+        return
+    
+    # Create output directory for visualizations
+    viz_dir = Path(config.VIZ_DIR)
+    viz_dir.mkdir(exist_ok=True)
+    
+    # Filter to only include users who do ASH (not just SHP)
+    if 'is_ash_user' in df.columns:
+        df_ash_users = df[df['is_ash_user'] == True]
+        print(f"Filtered data to only include users who do ASH: {len(df_ash_users)} out of {len(df)} records")
+    else:
+        # Fallback if the flag is not present
+        print("Warning: is_ash_user flag not found in data. Using all users.")
+        df_ash_users = df
+    
+    # Check if last_scan_time is available in the dataframe
+    has_time_data = 'last_scan_time' in df_ash_users.columns
+    
+    # Prepare aggregation dictionary based on available columns
+    agg_dict = {
+        'scanned_packages': 'sum',
+        'delivery_total_packages': 'first'
+    }
+    
+    # Add last_scan_time to aggregation if it exists
+    if has_time_data:
+        agg_dict['last_scan_time'] = 'max'
+    
+    # Aggregate data by delivery to get total scanned packages and total packages
+    delivery_data = df_ash_users.groupby('delivery').agg(agg_dict).reset_index()
+    
+    # Filter out rows with missing delivery_total_packages
+    delivery_data = delivery_data.dropna(subset=['delivery_total_packages'])
+    
+    # Convert to appropriate types
+    delivery_data['scanned_packages'] = delivery_data['scanned_packages'].astype(int)
+    delivery_data['delivery_total_packages'] = delivery_data['delivery_total_packages'].astype(int)
+    
+    # Sort by most recent activity if time data is available, otherwise by completion percentage
+    if has_time_data:
+        delivery_data = delivery_data.sort_values('last_scan_time', ascending=False)
+    else:
+        # Calculate completion percentage for sorting
+        delivery_data['completion_percentage'] = (delivery_data['scanned_packages'] / 
+                                                delivery_data['delivery_total_packages'] * 100)
+        delivery_data = delivery_data.sort_values('completion_percentage', ascending=False)
+    
+    # Take top 10 deliveries for readability (reduced from 15)
+    delivery_data = delivery_data.head(10)
+    
+    # Calculate completion percentage for all deliveries
+    delivery_data['completion_percentage'] = (delivery_data['scanned_packages'] / 
+                                             delivery_data['delivery_total_packages'] * 100)
+    
+    # Sort by completion percentage for better visualization (descending order)
+    delivery_data = delivery_data.sort_values('completion_percentage', ascending=False)
+    
+    # Create a more readable horizontal bar chart
+    plt.figure(figsize=(14, 8))  # Wider figure for better readability
+    
+    # Create the plot with more space between bars
+    ax = plt.subplot(111)
+    
+    # Use delivery as y-axis labels but make them more readable
+    y_pos = np.arange(len(delivery_data))
+    
+    # Calculate the maximum package count for setting x-axis limits
+    max_packages = max(delivery_data['delivery_total_packages']) * 1.2  # Add 20% margin
+    
+    # Plot the bars with increased height and spacing
+    bars = ax.barh(y_pos, delivery_data['scanned_packages'], 
+                  height=0.5,  # Reduced height for better spacing
+                  color='#4CAF50',  # Green color for better visibility
+                  label='Scanned Packages')
+    
+    # Add total package count as a line or marker
+    for i, (_, row) in enumerate(delivery_data.iterrows()):
+        # Add a line representing total packages
+        ax.plot([0, row['delivery_total_packages']], [y_pos[i], y_pos[i]], 
+               'k-', alpha=0.5, linewidth=2)
+        
+        # Add a marker at the end
+        ax.plot(row['delivery_total_packages'], y_pos[i], 
+               'ro', alpha=0.8, markersize=8)
+    
+    # Add text labels showing "X of Y packages" with better positioning
+    for i, (_, row) in enumerate(delivery_data.iterrows()):
+        # Position text at the end of the bar or at a minimum position for visibility
+        text_x_pos = max(row['scanned_packages'] + (max_packages * 0.02), max_packages * 0.3)
+        
+        # Format text with bold for scanned packages
+        ax.text(text_x_pos, y_pos[i], 
+               f"{int(row['scanned_packages'])} of {int(row['delivery_total_packages'])} packages", 
+               va='center', fontsize=10, fontweight='bold')
+        
+        # Add percentage in parentheses
+        percentage = row['completion_percentage']
+        ax.text(text_x_pos, y_pos[i] - 0.2, 
+               f"({percentage:.1f}%)", 
+               va='center', fontsize=9, color='#555555')
+    
+    # Set custom y-tick labels with delivery numbers
+    plt.yticks(y_pos, delivery_data['delivery'])
+    
+    # Set x-axis limit to ensure all labels are visible
+    plt.xlim(0, max_packages)
+    
+    # Set labels and title with improved styling
+    plt.title('Delivery Completion by Package Count', fontsize=16, fontweight='bold')
+    plt.xlabel('Number of Packages', fontsize=12)
+    plt.ylabel('Delivery Number', fontsize=12)
+    
+    # Add gridlines for better readability
+    plt.grid(axis='x', linestyle='--', alpha=0.7)
+    
+    # Add a legend with better positioning
+    from matplotlib.lines import Line2D
+    custom_lines = [
+        Line2D([0], [0], color='#4CAF50', lw=4),
+        Line2D([0], [0], color='black', alpha=0.5, linewidth=2),
+        Line2D([0], [0], marker='o', color='red', alpha=0.8, markersize=8, linestyle='None')
+    ]
+    ax.legend(custom_lines, ['Scanned Packages', 'Total Packages', 'Target'], 
+             loc='upper right', frameon=True, framealpha=0.9)
+    
+    plt.tight_layout()
+    plt.savefig(viz_dir / 'delivery_completion.png', dpi=120)  # Higher DPI for better quality
+    plt.close()
+    
+    print(f"Delivery completion visualization saved to {viz_dir.absolute()}")
+
 def main():
     """Main function to read data and create visualizations."""
     print("Visualizing shipment tracker results...")
@@ -233,6 +374,7 @@ def main():
     # Read and visualize main output data
     df = read_latest_output()
     create_visualizations(df)
+    create_delivery_completion_visualization(df)
     
     # Read and visualize time metrics data
     df_time = read_latest_time_metrics()
