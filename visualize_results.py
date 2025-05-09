@@ -78,34 +78,7 @@ def create_visualizations(df):
     plt.savefig(viz_dir / 'status_breakdown.png')
     plt.close()
     
-    # 3. Scanning progress by delivery (only ASH users)
-    plt.figure(figsize=(12, 8))
-    # Filter to top 10 deliveries by total packages for readability
-    top_deliveries = df_ash_users.groupby('delivery')['delivery_total_packages'].first().sort_values(ascending=False).head(10).index
-    delivery_data = df_ash_users[df_ash_users['delivery'].isin(top_deliveries)].groupby('delivery').agg({
-        'scanned_packages': 'sum',
-        'delivery_total_packages': 'first'
-    })
-    
-    # Calculate percentage scanned
-    delivery_data['percent_scanned'] = (delivery_data['scanned_packages'] / delivery_data['delivery_total_packages'] * 100).clip(upper=100)
-    delivery_data = delivery_data.sort_values('percent_scanned', ascending=False)
-    
-    ax = delivery_data['percent_scanned'].plot(kind='bar', color='lightgreen')
-    plt.title('Scanning Progress by Delivery (Top 10 Deliveries, ASH Users Only)')
-    plt.xlabel('Delivery')
-    plt.ylabel('Percentage Scanned')
-    plt.axhline(y=100, color='red', linestyle='--', alpha=0.7)
-    
-    # Add percentage labels on bars
-    for i, v in enumerate(delivery_data['percent_scanned']):
-        ax.text(i, v + 1, f"{v:.1f}%", ha='center')
-    
-    plt.tight_layout()
-    plt.savefig(viz_dir / 'delivery_progress.png')
-    plt.close()
-    
-    # 4. User activity timeline (based on last scan time, only ASH users)
+    # 3. User activity timeline (based on last scan time, only ASH users)
     plt.figure(figsize=(10, 6))
     # Convert to datetime if not already
     if 'last_scan_time' in df_ash_users.columns and len(df_ash_users['last_scan_time']) > 0:
