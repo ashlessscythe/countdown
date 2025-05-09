@@ -437,6 +437,7 @@ def process_snapshot():
 def main():
     """
     Main function to run the shipment tracking process at regular intervals.
+    Also runs visualization after a short delay.
     """
     # Configure logging
     logging.basicConfig(
@@ -450,6 +451,9 @@ def main():
     
     logging.info("Starting shipment tracking service...")
     
+    # Import visualization functions here to avoid circular imports
+    import visualize_results
+    
     # Run the process in a loop
     while True:
         try:
@@ -457,8 +461,23 @@ def main():
         except Exception as e:
             logging.exception("Unexpected error in processing cycle")
         
-        logging.info(f"Sleeping for {config.INTERVAL_SECONDS} seconds...")
-        time.sleep(config.INTERVAL_SECONDS)
+        # Wait 10 seconds before running visualization
+        logging.info("Waiting 10 seconds before running visualization...")
+        time.sleep(10)
+        
+        # Run visualization
+        try:
+            logging.info("Running visualization...")
+            visualize_results.main()
+            logging.info("Visualization complete.")
+        except Exception as e:
+            logging.exception("Unexpected error in visualization")
+        
+        # Calculate remaining sleep time
+        remaining_sleep = config.INTERVAL_SECONDS - 10
+        if remaining_sleep > 0:
+            logging.info(f"Sleeping for remaining {remaining_sleep} seconds...")
+            time.sleep(remaining_sleep)
 
 if __name__ == "__main__":
     main()
