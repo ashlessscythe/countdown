@@ -43,11 +43,21 @@ def create_visualizations(df):
     viz_dir = Path(config.VIZ_DIR)
     viz_dir.mkdir(exist_ok=True)
     
-    # 1. Packages scanned per user
+    # Filter to only include users who do ASH (not just SHP)
+    # The is_ash_user flag is added in shipment_tracker.py
+    if 'is_ash_user' in df.columns:
+        df_ash_users = df[df['is_ash_user'] == True]
+        print(f"Filtered data to only include users who do ASH: {len(df_ash_users)} out of {len(df)} records")
+    else:
+        # Fallback if the flag is not present
+        print("Warning: is_ash_user flag not found in data. Using all users.")
+        df_ash_users = df
+    
+    # 1. Packages scanned per user (only ASH users)
     plt.figure(figsize=(10, 6))
-    user_packages = df.groupby('user')['scanned_packages'].sum().sort_values(ascending=False)
+    user_packages = df_ash_users.groupby('user')['scanned_packages'].sum().sort_values(ascending=False)
     user_packages.plot(kind='bar', color='skyblue')
-    plt.title('Total Packages Scanned by User')
+    plt.title('Total Packages Scanned by User (ASH Users Only)')
     plt.xlabel('User')
     plt.ylabel('Packages Scanned')
     plt.tight_layout()
@@ -57,22 +67,22 @@ def create_visualizations(df):
     # 2. Status breakdown (picked vs shipped)
     plt.figure(figsize=(10, 6))
     status_totals = pd.DataFrame({
-        'Picked': df['picked_count'].sum(),
-        'Shipped': df['shipped_closed_count'].sum()
+        'Picked': df_ash_users['picked_count'].sum(),
+        'Shipped': df_ash_users['shipped_closed_count'].sum()
     }, index=['Status'])
     status_totals.T.plot(kind='bar', color=['orange', 'green'])
-    plt.title('Status Breakdown: Picked vs Shipped Packages')
+    plt.title('Status Breakdown: Picked vs Shipped Packages (ASH Users Only)')
     plt.xlabel('Status')
     plt.ylabel('Number of Packages')
     plt.tight_layout()
     plt.savefig(viz_dir / 'status_breakdown.png')
     plt.close()
     
-    # 3. Scanning progress by delivery
+    # 3. Scanning progress by delivery (only ASH users)
     plt.figure(figsize=(12, 8))
     # Filter to top 10 deliveries by total packages for readability
-    top_deliveries = df.groupby('delivery')['delivery_total_packages'].first().sort_values(ascending=False).head(10).index
-    delivery_data = df[df['delivery'].isin(top_deliveries)].groupby('delivery').agg({
+    top_deliveries = df_ash_users.groupby('delivery')['delivery_total_packages'].first().sort_values(ascending=False).head(10).index
+    delivery_data = df_ash_users[df_ash_users['delivery'].isin(top_deliveries)].groupby('delivery').agg({
         'scanned_packages': 'sum',
         'delivery_total_packages': 'first'
     })
@@ -82,7 +92,7 @@ def create_visualizations(df):
     delivery_data = delivery_data.sort_values('percent_scanned', ascending=False)
     
     ax = delivery_data['percent_scanned'].plot(kind='bar', color='lightgreen')
-    plt.title('Scanning Progress by Delivery (Top 10 Deliveries)')
+    plt.title('Scanning Progress by Delivery (Top 10 Deliveries, ASH Users Only)')
     plt.xlabel('Delivery')
     plt.ylabel('Percentage Scanned')
     plt.axhline(y=100, color='red', linestyle='--', alpha=0.7)
@@ -95,19 +105,19 @@ def create_visualizations(df):
     plt.savefig(viz_dir / 'delivery_progress.png')
     plt.close()
     
-    # 4. User activity timeline (based on last scan time)
+    # 4. User activity timeline (based on last scan time, only ASH users)
     plt.figure(figsize=(10, 6))
     # Convert to datetime if not already
-    if 'last_scan_time' in df.columns and len(df['last_scan_time']) > 0:
-        if df['last_scan_time'].dtype != 'datetime64[ns]':
-            df['last_scan_time'] = pd.to_datetime(df['last_scan_time'])
+    if 'last_scan_time' in df_ash_users.columns and len(df_ash_users['last_scan_time']) > 0:
+        if df_ash_users['last_scan_time'].dtype != 'datetime64[ns]':
+            df_ash_users['last_scan_time'] = pd.to_datetime(df_ash_users['last_scan_time'])
         
         # Get most recent scan per user
-        user_last_scan = df.groupby('user')['last_scan_time'].max().sort_values()
+        user_last_scan = df_ash_users.groupby('user')['last_scan_time'].max().sort_values()
         
         # Plot timeline
         ax = user_last_scan.plot(kind='barh', color='purple')
-        plt.title('Last Activity by User')
+        plt.title('Last Activity by User (ASH Users Only)')
         plt.xlabel('Last Scan Time')
         plt.ylabel('User')
         
@@ -132,11 +142,13 @@ def create_time_metrics_visualizations(df_time):
     viz_dir = Path(config.VIZ_DIR)
     viz_dir.mkdir(exist_ok=True)
     
+    # Note: Time metrics are already filtered to only include ASH users in shipment_tracker.py
+    
     # 1. Average time between scans per user (in minutes)
     plt.figure(figsize=(10, 6))
     avg_times = df_time.sort_values('avg_time_between_scans_minutes', ascending=True)
     ax = avg_times.plot(kind='barh', x='user', y='avg_time_between_scans_minutes', color='teal')
-    plt.title('Average Time Between Scans by User')
+    plt.title('Average Time Between Scans by User (ASH Users Only)')
     plt.xlabel('Time (minutes)')
     plt.ylabel('User')
     
@@ -152,7 +164,7 @@ def create_time_metrics_visualizations(df_time):
     plt.figure(figsize=(10, 6))
     last_scan_times = df_time.sort_values('time_since_last_scan_minutes', ascending=True)
     ax = last_scan_times.plot(kind='barh', x='user', y='time_since_last_scan_minutes', color='coral')
-    plt.title('Time Since Last Scan by User')
+    plt.title('Time Since Last Scan by User (ASH Users Only)')
     plt.xlabel('Time (minutes)')
     plt.ylabel('User')
     
@@ -168,7 +180,7 @@ def create_time_metrics_visualizations(df_time):
     plt.figure(figsize=(10, 6))
     scan_counts = df_time.sort_values('scan_count', ascending=False)
     ax = scan_counts.plot(kind='bar', x='user', y='scan_count', color='lightblue')
-    plt.title('Total Scan Count by User')
+    plt.title('Total Scan Count by User (ASH Users Only)')
     plt.xlabel('User')
     plt.ylabel('Number of Scans')
     
@@ -204,7 +216,7 @@ def create_time_metrics_visualizations(df_time):
     
     if boxplot_data:
         plt.boxplot(boxplot_data, labels=labels, patch_artist=True)
-        plt.title('Distribution of Time Between Scans for Top Users')
+        plt.title('Distribution of Time Between Scans for Top Users (ASH Users Only)')
         plt.xlabel('User')
         plt.ylabel('Time Between Scans (minutes)')
         plt.grid(True, linestyle='--', alpha=0.7)

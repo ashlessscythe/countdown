@@ -276,11 +276,29 @@ def process_snapshot():
     # Map status codes to text
     df_serial['StatusText'] = df_serial['Status'].map(config.STATUS_MAPPING)
     
-    # Handle the case where a serial appears as both ASH and SHP
-    # If a serial is shipped, remove any picked records for that serial
-    shipped_serials = set(df_serial[df_serial['Status'] == 'SHP']['Serial #'])
-    df_serial = df_serial[~((df_serial['Serial #'].isin(shipped_serials)) & 
+    # Identify users who do ASH (for filtering visualizations later)
+    ash_users = set(df_serial[df_serial['Status'] == 'ASH']['Created by'])
+    
+    # Find serials that have both ASH and SHP records
+    # Group by Serial # and check if both ASH and SHP statuses exist
+    serial_status_counts = df_serial.groupby('Serial #')['Status'].apply(set)
+    
+    # Serials with both ASH and SHP
+    serials_with_both = serial_status_counts[serial_status_counts.apply(lambda x: 'ASH' in x and 'SHP' in x)].index
+    
+    # Serials with only SHP (no corresponding ASH)
+    serials_with_only_shp = serial_status_counts[serial_status_counts.apply(lambda x: 'SHP' in x and 'ASH' not in x)].index
+    
+    # Remove SHP records for serials that only have SHP (no corresponding ASH)
+    df_serial = df_serial[~((df_serial['Serial #'].isin(serials_with_only_shp)) & 
+                           (df_serial['Status'] == 'SHP'))]
+    
+    # For serials with both ASH and SHP, keep only the SHP records (count as shipped)
+    df_serial = df_serial[~((df_serial['Serial #'].isin(serials_with_both)) & 
                            (df_serial['Status'] == 'ASH'))]
+    
+    # Add a flag to identify users who do ASH
+    df_serial['is_ash_user'] = df_serial['Created by'].isin(ash_users)
 
     # 4. Create a base aggregation by user and delivery
     agg = df_serial.groupby(['Created by', 'Delivery']).size().reset_index(name='total_records')
@@ -340,8 +358,12 @@ def process_snapshot():
     agg['progress_percentage'] = agg['progress_percentage'].round(2)
     
     # 7. Calculate time metrics for users
-    # This creates a separate dataframe with time between scans data
-    time_metrics_df = calculate_time_metrics(df_serial, reference_time)
+    # Only calculate time metrics for users who do ASH
+    df_serial_ash_users = df_serial[df_serial['Created by'].isin(ash_users)]
+    time_metrics_df = calculate_time_metrics(df_serial_ash_users, reference_time)
+    
+    # Add the is_ash_user flag to the aggregated data
+    agg['is_ash_user'] = agg['Created by'].isin(ash_users)
     
     # 8. Rename columns for final output
     agg = agg.rename(columns={'Created by': 'user', 'Delivery': 'delivery'})
