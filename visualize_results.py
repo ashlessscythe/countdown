@@ -340,17 +340,183 @@ def create_delivery_completion_visualization(df):
     
     print(f"Delivery completion visualization saved to {viz_dir.absolute()}")
 
+def create_delivery_time_visualization(df, df_time=None):
+    """
+    Create visualization showing time since last scan for breakdown by delivery.
+    Includes customer name (if available) and package count information.
+    
+    Args:
+        df (DataFrame): DataFrame containing the aggregated shipment data
+        df_time (DataFrame, optional): DataFrame containing time metrics data
+    """
+    if df is None or len(df) == 0:
+        print("No data to visualize delivery time metrics.")
+        return
+    
+    # Create output directory for visualizations
+    viz_dir = Path(config.VIZ_DIR)
+    viz_dir.mkdir(exist_ok=True)
+    
+    # Filter to only include users who do ASH (not just SHP)
+    if 'is_ash_user' in df.columns:
+        df_ash_users = df[df['is_ash_user'] == True]
+        print(f"Filtered data to only include users who do ASH: {len(df_ash_users)} out of {len(df)} records")
+    else:
+        # Fallback if the flag is not present
+        print("Warning: is_ash_user flag not found in data. Using all users.")
+        df_ash_users = df
+    
+    # Prepare aggregation dictionary for delivery data
+    agg_dict = {
+        'scanned_packages': 'sum',
+        'delivery_total_packages': 'first',
+        'user': lambda x: list(set(x))  # Get unique users for each delivery
+    }
+    
+    # Check if customer name is available in the dataframe
+    has_customer_name = 'customer_name' in df_ash_users.columns
+    if has_customer_name:
+        agg_dict['customer_name'] = 'first'
+    
+    # Aggregate data by delivery
+    delivery_data = df_ash_users.groupby('delivery').agg(agg_dict).reset_index()
+    
+    # Filter out rows with missing delivery_total_packages
+    delivery_data = delivery_data.dropna(subset=['delivery_total_packages'])
+    
+    # Convert to appropriate types
+    delivery_data['scanned_packages'] = delivery_data['scanned_packages'].astype(int)
+    delivery_data['delivery_total_packages'] = delivery_data['delivery_total_packages'].astype(int)
+    
+    # Calculate time since last scan for each delivery
+    # We'll use the time metrics data if available
+    if df_time is not None and 'last_scan_time' in df_time.columns and 'time_since_last_scan_minutes' in df_time.columns:
+        print("Using time metrics data for delivery time visualization.")
+        
+        # Create a mapping of user to time since last scan
+        user_time_map = dict(zip(df_time['user'], df_time['time_since_last_scan_minutes']))
+        
+        # For each delivery, find the minimum time since last scan among its users
+        delivery_data['time_since_last_scan'] = delivery_data['user'].apply(
+            lambda users: min([user_time_map.get(user, float('inf')) for user in users]) 
+            if users else float('inf')
+        )
+        
+        # Filter out deliveries with no time data
+        delivery_data = delivery_data[delivery_data['time_since_last_scan'] < float('inf')]
+        
+        if len(delivery_data) == 0:
+            print("No valid time data found for deliveries.")
+            return
+    else:
+        # Check if last_scan_time is available in the main dataframe
+        has_time_data = 'last_scan_time' in df_ash_users.columns
+        
+        if not has_time_data:
+            print("No time data available for delivery time visualization.")
+            return
+        
+        # Ensure last_scan_time is in datetime format
+        df_ash_users['last_scan_time'] = pd.to_datetime(df_ash_users['last_scan_time'])
+        
+        # Update aggregation to include last_scan_time
+        agg_dict['last_scan_time'] = 'max'
+        
+        # Re-aggregate with last_scan_time
+        delivery_data = df_ash_users.groupby('delivery').agg(agg_dict).reset_index()
+        
+        # Filter out rows with missing last_scan_time
+        delivery_data = delivery_data.dropna(subset=['last_scan_time'])
+        
+        # Calculate time since last scan
+        current_time = pd.Timestamp.now()
+        delivery_data['time_since_last_scan'] = (current_time - delivery_data['last_scan_time']).dt.total_seconds() / 60  # in minutes
+    
+    # Sort by time since last scan (ascending) and take top 10 deliveries
+    delivery_data = delivery_data.sort_values('time_since_last_scan', ascending=True)
+    delivery_data = delivery_data.head(10)
+    
+    # Create a horizontal bar chart
+    plt.figure(figsize=(14, 8))  # Wider figure for better readability
+    
+    # Create the plot
+    ax = plt.subplot(111)
+    
+    # Use delivery as y-axis labels
+    y_pos = np.arange(len(delivery_data))
+    
+    # Create custom labels with customer name if available
+    if has_customer_name:
+        y_labels = [f"{row['delivery']} - {row['customer_name']}" for _, row in delivery_data.iterrows()]
+    else:
+        y_labels = delivery_data['delivery'].tolist()
+    
+    # Plot the bars with a color gradient based on time (shorter time = greener, longer time = redder)
+    max_time = delivery_data['time_since_last_scan'].max()
+    norm = plt.Normalize(0, max_time)
+    colors = plt.cm.RdYlGn_r(norm(delivery_data['time_since_last_scan']))
+    
+    bars = ax.barh(y_pos, delivery_data['time_since_last_scan'], height=0.5, color=colors)
+    
+    # Add time labels on bars
+    for i, (_, row) in enumerate(delivery_data.iterrows()):
+        # Format time: if less than 60 minutes, show in minutes, otherwise show in hours and minutes
+        time_value = row['time_since_last_scan']
+        if time_value < 60:
+            time_text = f"{time_value:.1f} min"
+        else:
+            hours = int(time_value // 60)
+            minutes = int(time_value % 60)
+            time_text = f"{hours}h {minutes}m"
+        
+        # Position text at the end of the bar
+        ax.text(row['time_since_last_scan'] + (max_time * 0.02), y_pos[i], 
+               time_text, va='center', fontsize=10, fontweight='bold')
+        
+        # Add package count below the bar
+        ax.text(row['time_since_last_scan'] / 2, y_pos[i] - 0.25,
+               f"{int(row['scanned_packages'])} of {int(row['delivery_total_packages'])} packages", 
+               ha='center', va='center', fontsize=9, color='#333333',
+               bbox=dict(facecolor='white', alpha=0.7, boxstyle='round,pad=0.2'))
+    
+    # Set custom y-tick labels
+    plt.yticks(y_pos, y_labels)
+    
+    # Set labels and title
+    plt.title('Time Since Last Scan by Delivery', fontsize=16, fontweight='bold')
+    plt.xlabel('Time (minutes)', fontsize=12)
+    plt.ylabel('Delivery', fontsize=12)
+    
+    # Add gridlines for better readability
+    plt.grid(axis='x', linestyle='--', alpha=0.7)
+    
+    # Add a colorbar to show the time scale
+    from matplotlib.cm import ScalarMappable
+    sm = ScalarMappable(cmap=plt.cm.RdYlGn_r, norm=norm)
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=ax)  # Specify the axes for the colorbar
+    cbar.set_label('Time Since Last Scan (minutes)')
+    
+    plt.tight_layout()
+    plt.savefig(viz_dir / 'delivery_time_since_last_scan.png', dpi=120)
+    plt.close()
+    
+    print(f"Delivery time visualization saved to {viz_dir.absolute()}")
+
 def main():
     """Main function to read data and create visualizations."""
     print("Visualizing shipment tracker results...")
     
-    # Read and visualize main output data
+    # Read main output data and time metrics data
     df = read_latest_output()
+    df_time = read_latest_time_metrics()
+    
+    # Create visualizations
     create_visualizations(df)
     create_delivery_completion_visualization(df)
+    create_delivery_time_visualization(df, df_time)  # Pass both dataframes to the new visualization
     
-    # Read and visualize time metrics data
-    df_time = read_latest_time_metrics()
+    # Create time metrics visualizations
     create_time_metrics_visualizations(df_time)
     
     print("Visualization complete.")
