@@ -55,6 +55,188 @@ def sanitize_delivery_number(delivery):
     delivery_str = str(delivery).split('.')[0]
     return delivery_str
 
+def ensure_timestamp_column(df):
+    """
+    Ensure dataframe has a Timestamp column by combining 'Created on' and 'Time' columns.
+    
+    Args:
+        df (DataFrame): DataFrame to process
+        
+    Returns:
+        bool: True if timestamp column exists or was created, False otherwise
+    """
+    if 'Timestamp' not in df.columns:
+        if 'Created on' in df.columns and 'Time' in df.columns:
+            logging.info("Creating Timestamp column from 'Created on' and 'Time' columns")
+            
+            # First ensure both columns are strings
+            created_on_str = df['Created on'].astype(str)
+            time_str = df['Time'].astype(str)
+            
+            # Combine date and time columns to create a timestamp
+            df['Timestamp'] = created_on_str + ' ' + time_str
+            
+            try:
+                df['Timestamp'] = pd.to_datetime(df['Timestamp'])
+                logging.info(f"Converted timestamps to datetime. Sample: {df['Timestamp'].head(3)}")
+                return True
+            except Exception as e:
+                logging.error(f"Error converting timestamp to datetime: {e}")
+                return False
+        else:
+            logging.warning("Cannot create timestamp: 'Created on' or 'Time' columns missing")
+            return False
+    return True
+
+def filter_by_warehouse(df, warehouse_code):
+    """
+    Filter dataframe to only include records from the specified warehouse.
+    
+    Args:
+        df (DataFrame): DataFrame to filter
+        warehouse_code (str): Warehouse code to filter by
+        
+    Returns:
+        DataFrame: Filtered DataFrame
+    """
+    pre_length = len(df)
+    df_filtered = df[df['Warehouse Number'] == warehouse_code]
+    logging.info(f"Filtered data to warehouse {warehouse_code}. length before: {pre_length}, after: {len(df_filtered)}")
+    return df_filtered
+
+def filter_by_parent_serial(df):
+    """
+    Filter dataframe to only include records with no parent serial number.
+    
+    Args:
+        df (DataFrame): DataFrame to filter
+        
+    Returns:
+        DataFrame: Filtered DataFrame
+    """
+    pre_length = len(df)
+    df_filtered = df[df['Parent serial number'].isna() | (df['Parent serial number'] == '')]
+    logging.info(f"Filtered data to only include parent serial numbers. length before: {pre_length}, after: {len(df_filtered)}")
+    return df_filtered
+
+def filter_by_time_window(df, reference_time, window_minutes):
+    """
+    Filter dataframe to only include records within the specified time window.
+    
+    Args:
+        df (DataFrame): DataFrame to filter
+        reference_time (datetime): Reference time for the window
+        window_minutes (int): Window size in minutes
+        
+    Returns:
+        DataFrame: Filtered DataFrame
+    """
+    if 'Timestamp' not in df.columns:
+        if not ensure_timestamp_column(df):
+            return df
+    
+    pre_length = len(df)
+    cutoff_time = reference_time - pd.Timedelta(minutes=window_minutes)
+    df_filtered = df[df['Timestamp'] >= cutoff_time]
+    logging.info(f"Filtered data to only include records within the last {window_minutes} minutes")
+    logging.info(f"length before: {pre_length}, after: {len(df_filtered)}")
+    return df_filtered
+
+def deduplicate_serial_status(df):
+    """
+    Deduplicate records by Serial # and Status, keeping the most recent.
+    Assumes df is already sorted by timestamp in descending order.
+    
+    Args:
+        df (DataFrame): DataFrame to deduplicate
+        
+    Returns:
+        DataFrame: Deduplicated DataFrame
+    """
+    pre_length = len(df)
+    if 'Serial #' in df.columns and 'Status' in df.columns:
+        df_deduped = df.drop_duplicates(subset=['Serial #', 'Status'], keep='first')
+        logging.info("Deduplicated serial data by Serial # and Status (keeping most recent timestamp)")
+        logging.info(f"length before: {pre_length}, after: {len(df_deduped)}")
+        return df_deduped
+    return df
+
+def process_ash_shp_statuses(df):
+    """
+    Process ASH and SHP statuses according to business rules:
+    1. Identify serials with both ASH and SHP records
+    2. Remove SHP records for serials that only have SHP (no corresponding ASH)
+    3. For serials with both ASH and SHP, keep only the SHP records (count as shipped)
+    
+    Args:
+        df (DataFrame): DataFrame to process
+        
+    Returns:
+        DataFrame: Processed DataFrame, set of ASH users
+    """
+    # Identify users who do ASH (for filtering visualizations later)
+    ash_users = set(df[df['Status'] == 'ASH']['Created by'])
+    
+    # Find serials that have both ASH and SHP records
+    # Group by Serial # and check if both ASH and SHP statuses exist
+    serial_status_counts = df.groupby('Serial #')['Status'].apply(set)
+    
+    # Serials with both ASH and SHP
+    serials_with_both = serial_status_counts[serial_status_counts.apply(lambda x: 'ASH' in x and 'SHP' in x)].index
+    
+    # Serials with only SHP (no corresponding ASH)
+    serials_with_only_shp = serial_status_counts[serial_status_counts.apply(lambda x: 'SHP' in x and 'ASH' not in x)].index
+    
+    # Remove SHP records for serials that only have SHP (no corresponding ASH)
+    df = df[~((df['Serial #'].isin(serials_with_only_shp)) & 
+             (df['Status'] == 'SHP'))]
+    
+    # For serials with both ASH and SHP, keep only the SHP records (count as shipped)
+    df = df[~((df['Serial #'].isin(serials_with_both)) & 
+             (df['Status'] == 'ASH'))]
+    
+    # Add a flag to identify users who do ASH
+    df['is_ash_user'] = df['Created by'].isin(ash_users)
+    
+    return df, ash_users
+
+def apply_shp_ceiling_timestamp(df):
+    """
+    Apply timestamp ceiling for serials where SHP is the last status.
+    For each serial, find the latest SHP timestamp and filter out any records after that.
+    
+    Args:
+        df (DataFrame): DataFrame to process
+        
+    Returns:
+        DataFrame: Processed DataFrame
+    """
+    if 'Timestamp' not in df.columns:
+        return df
+    
+    # Get serials with SHP status
+    serials_with_shp = df[df['Status'] == 'SHP']
+    
+    if not serials_with_shp.empty:
+        # Get the latest SHP timestamp for each serial
+        latest_shp = serials_with_shp.groupby('Serial #')['Timestamp'].max()
+        
+        # More efficient approach using vectorized operations
+        # Create a temporary column with the SHP ceiling timestamp for each serial
+        df['shp_ceiling'] = df['Serial #'].map(latest_shp)
+        
+        # Keep only rows where either:
+        # 1. The serial doesn't have a SHP ceiling timestamp, or
+        # 2. The timestamp is not after the SHP ceiling
+        df = df[(df['shp_ceiling'].isna()) | (df['Timestamp'] <= df['shp_ceiling'])]
+        
+        # Drop the temporary column
+        df = df.drop('shp_ceiling', axis=1)
+        
+        logging.info(f"Applied timestamp ceiling for {len(latest_shp)} serials with SHP status")
+    
+    return df
+
 def calculate_time_metrics(df_serial, reference_time=None):
     """
     Calculate time between scans metrics for each user.
@@ -72,29 +254,8 @@ def calculate_time_metrics(df_serial, reference_time=None):
     for col in df_serial.columns:
         logging.info(f"{col}: {df_serial[col].dtype}")
     
-    # Create a timestamp column if it doesn't exist by combining 'Created on' and 'Time'
-    if 'Timestamp' not in df_serial.columns:
-        if 'Created on' in df_serial.columns and 'Time' in df_serial.columns:
-            logging.info("Creating Timestamp column from 'Created on' and 'Time' columns")
-            
-            # First ensure both columns are strings
-            created_on_str = df_serial['Created on'].astype(str)
-            time_str = df_serial['Time'].astype(str)
-            
-            # Combine date and time columns to create a timestamp
-            df_serial['Timestamp'] = created_on_str + ' ' + time_str
-            
-            logging.info(f"Sample timestamp values: {df_serial['Timestamp'].head(3).tolist()}")
-        else:
-            logging.warning("Cannot create timestamp: 'Created on' or 'Time' columns missing")
-            return pd.DataFrame()
-    
-    # Convert timestamp to datetime if it's not already
-    try:
-        df_serial['Timestamp'] = pd.to_datetime(df_serial['Timestamp'])
-        logging.info(f"Converted timestamps to datetime. Sample: {df_serial['Timestamp'].head(3)}")
-    except Exception as e:
-        logging.error(f"Error converting timestamp to datetime: {e}")
+    # Ensure we have a timestamp column
+    if not ensure_timestamp_column(df_serial):
         return pd.DataFrame()
     
     # Sort by user and timestamp
@@ -128,8 +289,12 @@ def calculate_time_metrics(df_serial, reference_time=None):
         # Convert time differences to seconds
         time_diffs_seconds = time_diffs.dt.total_seconds()
         
-        # Calculate metrics
-        avg_time_between_scans = time_diffs_seconds.mean()
+        # Calculate metrics with safeguards for empty dataframes
+        if time_diffs_seconds.empty:
+            avg_time_between_scans = 0
+        else:
+            avg_time_between_scans = time_diffs_seconds.mean()
+            
         last_scan_time = group['Timestamp'].max()
         
         # Ensure last_scan_time is timezone-naive for comparison with now
@@ -144,7 +309,6 @@ def calculate_time_metrics(df_serial, reference_time=None):
         
         # If time_since_last_scan is negative, it means the last scan time is in the future
         # This could be due to clock synchronization issues or timezone problems
-        # In this case, set time_since_last_scan to 0 to avoid negative values
         if time_since_last_scan < 0:
             logging.warning(f"Negative time since last scan detected for user {user}. "
                            f"Last scan time: {last_scan_time}, Current time: {now}. "
@@ -152,7 +316,7 @@ def calculate_time_metrics(df_serial, reference_time=None):
             time_since_last_scan = 0
         
         # Create a list of all time differences for this user
-        time_diff_list = time_diffs_seconds.tolist()
+        time_diff_list = time_diffs_seconds.tolist() if not time_diffs_seconds.empty else []
         
         # Add to results
         time_metrics.append({
@@ -247,58 +411,34 @@ def process_snapshot():
         logging.error(f"Error reading Excel files: {e}")
         return
 
-    # 3. Filter warehouse and clean status data
-    df_serial = df_serial[df_serial['Warehouse Number'] == config.WAREHOUSE_FILTER]
+    # 3. Filter and process serial data
+    # Apply filters in sequence
+    df_serial = filter_by_warehouse(df_serial, config.WAREHOUSE_FILTER)
+    df_serial = filter_by_parent_serial(df_serial)
     
-    # Filter to only include serials with no parent serial number (pallet = 1 will be included)
-    df_serial = df_serial[df_serial['Parent serial number'].isna() | (df_serial['Parent serial number'] == '')]
+    # Ensure timestamp column exists
+    ensure_timestamp_column(df_serial)
     
-    # Filter serials based on the time window defined by WINDOW_MINUTES
-    # First ensure we have a Timestamp column
-    if 'Timestamp' not in df_serial.columns:
-        if 'Created on' in df_serial.columns and 'Time' in df_serial.columns:
-            # Convert 'Created on' and 'Time' to a timestamp
-            created_on_str = df_serial['Created on'].astype(str)
-            time_str = df_serial['Time'].astype(str)
-            df_serial['Timestamp'] = created_on_str + ' ' + time_str
-            df_serial['Timestamp'] = pd.to_datetime(df_serial['Timestamp'])
-        else:
-            logging.warning("Cannot filter by time window: 'Created on' or 'Time' columns missing")
-    
-    # If we have a Timestamp column, filter based on WINDOW_MINUTES
+    # Sort by timestamp in descending order (newest first)
     if 'Timestamp' in df_serial.columns:
-        # Calculate the cutoff time (current time minus WINDOW_MINUTES)
-        cutoff_time = pd.Timestamp.now() - pd.Timedelta(minutes=config.WINDOW_MINUTES)
-        # Filter to only include records within the time window
-        df_serial = df_serial[df_serial['Timestamp'] >= cutoff_time]
-        logging.info(f"Filtered serial data to only include records within the last {config.WINDOW_MINUTES} minutes")
+        df_serial = df_serial.sort_values('Timestamp', ascending=False)
+        logging.info("Sorted serial data by timestamp in descending order (newest first)")
+    
+    # Deduplicate by serial number and status
+    df_serial = deduplicate_serial_status(df_serial)
+    
+    # Filter by time window
+    if reference_time:
+        df_serial = filter_by_time_window(df_serial, reference_time, config.WINDOW_MINUTES)
     
     # Map status codes to text
     df_serial['StatusText'] = df_serial['Status'].map(config.STATUS_MAPPING)
     
-    # Identify users who do ASH (for filtering visualizations later)
-    ash_users = set(df_serial[df_serial['Status'] == 'ASH']['Created by'])
+    # Process ASH and SHP statuses
+    df_serial, ash_users = process_ash_shp_statuses(df_serial)
     
-    # Find serials that have both ASH and SHP records
-    # Group by Serial # and check if both ASH and SHP statuses exist
-    serial_status_counts = df_serial.groupby('Serial #')['Status'].apply(set)
-    
-    # Serials with both ASH and SHP
-    serials_with_both = serial_status_counts[serial_status_counts.apply(lambda x: 'ASH' in x and 'SHP' in x)].index
-    
-    # Serials with only SHP (no corresponding ASH)
-    serials_with_only_shp = serial_status_counts[serial_status_counts.apply(lambda x: 'SHP' in x and 'ASH' not in x)].index
-    
-    # Remove SHP records for serials that only have SHP (no corresponding ASH)
-    df_serial = df_serial[~((df_serial['Serial #'].isin(serials_with_only_shp)) & 
-                           (df_serial['Status'] == 'SHP'))]
-    
-    # For serials with both ASH and SHP, keep only the SHP records (count as shipped)
-    df_serial = df_serial[~((df_serial['Serial #'].isin(serials_with_both)) & 
-                           (df_serial['Status'] == 'ASH'))]
-    
-    # Add a flag to identify users who do ASH
-    df_serial['is_ash_user'] = df_serial['Created by'].isin(ash_users)
+    # Apply timestamp ceiling for serials where SHP is the last status
+    df_serial = apply_shp_ceiling_timestamp(df_serial)
 
     # 4. Create a base aggregation by user and delivery
     agg = df_serial.groupby(['Created by', 'Delivery']).size().reset_index(name='total_records')
@@ -337,9 +477,9 @@ def process_snapshot():
     agg = agg.drop('delivery_clean', axis=1)
     
     # 6. Calculate progress metrics
-    # For progress calculation, consider both picked and shipped items as "scanned"
+    # For progress calculation, consider only picked as "scanned"
     # If all items are shipped, progress should be 100%
-    agg['scanned_packages'] = agg['picked_count'] + agg['shipped_closed_count']
+    agg['scanned_packages'] = agg['picked_count']
     
     # Calculate progress percentage
     # Only calculate where delivery_total_packages is not null
@@ -347,8 +487,12 @@ def process_snapshot():
     mask = ~agg['delivery_total_packages'].isna()
     
     # Calculate progress percentage based on scanned packages vs total packages
-    agg.loc[mask, 'progress_percentage'] = (agg.loc[mask, 'scanned_packages'] / 
-                                           agg.loc[mask, 'delivery_total_packages']) * 100
+    # Add safeguard for division by zero
+    agg.loc[mask, 'progress_percentage'] = np.where(
+        agg.loc[mask, 'delivery_total_packages'] > 0,
+        (agg.loc[mask, 'scanned_packages'] / agg.loc[mask, 'delivery_total_packages']) * 100,
+        0
+    )
     
     # If all items are shipped, set progress to 100%
     all_shipped_mask = (agg['shipped_closed_count'] > 0) & (agg['picked_count'] == 0)
@@ -359,8 +503,36 @@ def process_snapshot():
     
     # 7. Calculate time metrics for users
     # Only calculate time metrics for users who do ASH
-    df_serial_ash_users = df_serial[df_serial['Created by'].isin(ash_users)]
-    time_metrics_df = calculate_time_metrics(df_serial_ash_users, reference_time)
+    # Note: We need to use the original dataframe before deduplication for time metrics
+    # to ensure we have enough data points for each user
+    
+    # First, get the original dataframe before deduplication
+    # We need to recreate it from the Excel file
+    try:
+        df_serial_original = pd.read_excel(serial_file)
+        
+        # Apply the same filters as before
+        df_serial_original = filter_by_warehouse(df_serial_original, config.WAREHOUSE_FILTER)
+        df_serial_original = filter_by_parent_serial(df_serial_original)
+        ensure_timestamp_column(df_serial_original)
+        
+        # Filter by time window
+        if reference_time:
+            df_serial_original = filter_by_time_window(df_serial_original, reference_time, config.WINDOW_MINUTES)
+        
+        # Get ASH users from the original dataframe
+        ash_users_original = set(df_serial_original[df_serial_original['Status'] == 'ASH']['Created by'])
+        
+        # Calculate time metrics using the original dataframe
+        df_serial_ash_users = df_serial_original[df_serial_original['Created by'].isin(ash_users_original)]
+        time_metrics_df = calculate_time_metrics(df_serial_ash_users, reference_time)
+        
+        logging.info(f"Calculated time metrics using original dataframe with {len(df_serial_original)} records")
+        logging.info(f"Time metrics calculated for {len(time_metrics_df)} users")
+        
+    except Exception as e:
+        logging.error(f"Error calculating time metrics: {e}")
+        time_metrics_df = pd.DataFrame()
     
     # Add the is_ash_user flag to the aggregated data
     agg['is_ash_user'] = agg['Created by'].isin(ash_users)
@@ -411,28 +583,29 @@ def process_snapshot():
             logging.info(f"Wrote time metrics file: {time_metrics_path}")
         
         # 11. Cleanup old outputs (keep last 5)
-        outputs = sorted(Path(config.OUT_DIR).glob("output_*.parquet"), 
-                        key=lambda f: f.stat().st_mtime, reverse=True)
-        
-        for old_file in outputs[5:]:
-            try:
-                old_file.unlink()
-                logging.info(f"Removed old output file: {old_file.name}")
-            except Exception as e:
-                logging.warning(f"Failed to remove {old_file.name}: {e}")
-                
-        # Also cleanup old time metrics files (keep last 5)
-        time_metrics_files = sorted(Path(config.OUT_DIR).glob("time_metrics_*.parquet"), 
-                                  key=lambda f: f.stat().st_mtime, reverse=True)
-        
-        for old_file in time_metrics_files[5:]:
-            try:
-                old_file.unlink()
-                logging.info(f"Removed old time metrics file: {old_file.name}")
-            except Exception as e:
-                logging.warning(f"Failed to remove {old_file.name}: {e}")
+        cleanup_old_files(config.OUT_DIR, "output_*.parquet", 5)
+        cleanup_old_files(config.OUT_DIR, "time_metrics_*.parquet", 5)
     else:
         logging.info("No changes detected, skipping output generation")
+
+def cleanup_old_files(directory, pattern, keep_count):
+    """
+    Cleanup old files matching the pattern, keeping only the specified number of most recent files.
+    
+    Args:
+        directory (str): Directory to clean up
+        pattern (str): Glob pattern to match files
+        keep_count (int): Number of most recent files to keep
+    """
+    files = sorted(Path(directory).glob(pattern), 
+                  key=lambda f: f.stat().st_mtime, reverse=True)
+    
+    for old_file in files[keep_count:]:
+        try:
+            old_file.unlink()
+            logging.info(f"Removed old file: {old_file.name}")
+        except Exception as e:
+            logging.warning(f"Failed to remove {old_file.name}: {e}")
 
 def main():
     """
@@ -451,9 +624,6 @@ def main():
     
     logging.info("Starting shipment tracking service...")
     
-    # Import visualization functions here to avoid circular imports
-    import visualize_results
-    
     # Run the process in a loop
     while True:
         try:
@@ -465,13 +635,19 @@ def main():
         logging.info("Waiting 10 seconds before running visualization...")
         time.sleep(10)
         
-        # Run visualization
-        try:
-            logging.info("Running visualization...")
-            visualize_results.main()
-            logging.info("Visualization complete.")
-        except Exception as e:
-            logging.exception("Unexpected error in visualization")
+        # Run visualization if enabled (default: True)
+        run_visualization = getattr(config, 'RUN_VISUALIZATION', True)
+        if run_visualization:
+            try:
+                # Import visualization functions here to avoid circular imports
+                import visualize_results
+                logging.info("Running visualization...")
+                visualize_results.main()
+                logging.info("Visualization complete.")
+            except Exception as e:
+                logging.exception("Unexpected error in visualization")
+        else:
+            logging.info("Visualization disabled in config")
         
         # Calculate remaining sleep time
         remaining_sleep = config.INTERVAL_SECONDS - 10
