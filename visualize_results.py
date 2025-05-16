@@ -64,11 +64,11 @@ def create_visualizations(df):
     plt.savefig(viz_dir / 'packages_by_user.png')
     plt.close()
     
-    # 2. Status breakdown (picked vs shipped)
+    # 2. Status breakdown (assigned to shipper vs shipped)
     plt.figure(figsize=(10, 6))
     status_totals = pd.DataFrame({
-        'Picked': df_ash_users['picked_count'].sum(),
-        'Shipped': df_ash_users['shipped_closed_count'].sum()
+        'Picked': df_ash_users['assigned to shipper_count'].sum(),
+        'Shipped': df_ash_users['shipped_count'].sum()
     }, index=['Status'])
     status_totals.T.plot(kind='bar', color=['orange', 'green'])
     plt.title('Status Breakdown: Picked vs Shipped Packages (ASH Users Only)')

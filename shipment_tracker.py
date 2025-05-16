@@ -468,18 +468,40 @@ def process_snapshot():
     agg['delivery_clean'] = agg['Delivery'].apply(sanitize_delivery_number)
     df_delivery['delivery_clean'] = df_delivery['Delivery'].apply(sanitize_delivery_number)
     
-    # Merge delivery totals using the sanitized delivery numbers
-    agg = agg.merge(df_delivery[['delivery_clean', 'Number of packages']], 
-                   on='delivery_clean', how='left')
+    # Check for duplicate delivery numbers in delivery data
+    delivery_clean_counts = df_delivery['delivery_clean'].value_counts()
+    duplicate_deliveries = delivery_clean_counts[delivery_clean_counts > 1].index.tolist()
+    
+    if duplicate_deliveries:
+        logging.warning(f"Found {len(duplicate_deliveries)} duplicate delivery_clean values in df_delivery")
+        
+        # For each delivery, keep only one row with the total package count
+        # Group by delivery_clean and take the first row for each group
+        df_delivery_deduped = df_delivery.groupby('delivery_clean').first().reset_index()
+        
+        logging.info(f"Deduplicated delivery data. Shape before: {df_delivery.shape}, after: {df_delivery_deduped.shape}")
+        
+        # Merge delivery totals using the sanitized delivery numbers
+        df_delivery_matched = df_delivery_deduped[['delivery_clean', 'Number of packages']]
+        
+        logging.info(f"Created package counts based on matching materials. Shape: {df_delivery_matched.shape}")
+        
+        # Merge delivery totals using the sanitized delivery numbers and matched package counts
+        agg = agg.merge(df_delivery_matched, on='delivery_clean', how='left')
+    else:
+        # If no duplicates, proceed as before
+        agg = agg.merge(df_delivery[['delivery_clean', 'Number of packages']], 
+                       on='delivery_clean', how='left')
+    
     agg = agg.rename(columns={'Number of packages': 'delivery_total_packages'})
     
     # Drop the temporary column used for merging
     agg = agg.drop('delivery_clean', axis=1)
     
     # 6. Calculate progress metrics
-    # For progress calculation, consider only picked as "scanned"
+    # For progress calculation, consider ASH (assigned to shipper) as "picked"
     # If all items are shipped, progress should be 100%
-    agg['scanned_packages'] = agg['picked_count']
+    agg['scanned_packages'] = agg['assigned to shipper_count']
     
     # Calculate progress percentage
     # Only calculate where delivery_total_packages is not null
@@ -495,7 +517,7 @@ def process_snapshot():
     )
     
     # If all items are shipped, set progress to 100%
-    all_shipped_mask = (agg['shipped_closed_count'] > 0) & (agg['picked_count'] == 0)
+    all_shipped_mask = (agg['shipped_count'] > 0) & (agg['assigned to shipper_count'] == 0)
     agg.loc[all_shipped_mask, 'progress_percentage'] = 100.0
     
     # Round percentage to 2 decimal places
