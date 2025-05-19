@@ -646,17 +646,186 @@ def process_snapshot():
     agg['progress_percentage'] = 0.0  # Default to 0
     mask = ~agg['delivery_total_packages'].isna()
     
-    # Calculate progress percentage based on scanned packages vs total packages
-    # Add safeguard for division by zero
-    agg.loc[mask, 'progress_percentage'] = np.where(
-        agg.loc[mask, 'delivery_total_packages'] > 0,
-        (agg.loc[mask, 'scanned_packages'] / agg.loc[mask, 'delivery_total_packages']) * 100,
+    # Check if scanned packages exceed delivery total packages for each delivery
+    # If so, we need to compare counts and use the appropriate denominator
+    
+    # Check for original or sanitized column names for qty and material
+    qty_col = next((col for col in df_serial.columns if col in ['qty', 'Qty']), None)
+    material_col = next((col for col in df_serial.columns if col in ['material_number', 'Material Number']), None)
+    
+    # Check for original or sanitized column names for delivery_qty and material in df_delivery
+    delivery_qty_col = next((col for col in df_delivery.columns if col in ['delivery_quantity', 'actual_delivery_qty', 'Delivery Quantity', 'Actual Delivery Qty']), None)
+    delivery_material_col = next((col for col in df_delivery.columns if col in ['material', 'Material']), None)
+    
+    # Add a column to track if scanned exceeds expected
+    agg['scanned_exceeds_expected'] = False
+    
+    # Only proceed with detailed comparison if we have all required columns
+    if all([qty_col, material_col, delivery_qty_col, delivery_material_col]):
+        logging.info(f"Found all required columns for detailed quantity comparison")
+        
+        # Group by delivery and material in df_serial to get total qty for each material in each delivery
+        if delivery_col in df_serial.columns and material_col in df_serial.columns and qty_col in df_serial.columns:
+            # Create a mapping of delivery to a dict of material -> total qty
+            delivery_material_qty = {}
+            
+            # Group by delivery and material, and sum the quantities
+            serial_grouped = df_serial.groupby([delivery_col, material_col])[qty_col].sum().reset_index()
+            
+            # Store in a nested dictionary for easy lookup
+            for _, row in serial_grouped.iterrows():
+                delivery = row[delivery_col]
+                material = row[material_col]
+                qty = row[qty_col]
+                
+                sanitized_delivery = sanitize_delivery_number(delivery)
+                if sanitized_delivery:
+                    if sanitized_delivery not in delivery_material_qty:
+                        delivery_material_qty[sanitized_delivery] = {}
+                    
+                    delivery_material_qty[sanitized_delivery][material] = qty
+            
+            # Create a similar mapping for df_delivery
+            delivery_material_delivery_qty = {}
+            
+            # Group by delivery and material, and get the delivery quantities
+            for _, row in df_delivery.iterrows():
+                delivery = row[delivery_col_delivery]
+                material = row[delivery_material_col]
+                delivery_qty = row[delivery_qty_col]
+                
+                sanitized_delivery = sanitize_delivery_number(delivery)
+                if sanitized_delivery:
+                    if sanitized_delivery not in delivery_material_delivery_qty:
+                        delivery_material_delivery_qty[sanitized_delivery] = {}
+                    
+                    delivery_material_delivery_qty[sanitized_delivery][material] = delivery_qty
+            
+            # Compare quantities for each delivery-material combination
+            for idx, row in agg.iterrows():
+                delivery_num = sanitize_delivery_number(row[delivery_col])
+                if delivery_num:
+                    # Get all records for this delivery from serial_df
+                    delivery_serials = df_serial[df_serial[delivery_col] == row[delivery_col]]
+                    
+                    # Skip if no serials found
+                    if delivery_serials.empty:
+                        continue
+                    
+                    # Get unique materials for this delivery
+                    materials = delivery_serials[material_col].unique()
+                    
+                    # Track if any material exceeds expected
+                    exceeds_expected = False
+                    
+                    # Compare quantities for each material
+                    for material in materials:
+                        if pd.isna(material):
+                            continue
+                            
+                        # Get serial qty for this material
+                        serial_qty = delivery_material_qty.get(delivery_num, {}).get(material, 0)
+                        
+                        # Get delivery qty for this material
+                        delivery_qty = delivery_material_delivery_qty.get(delivery_num, {}).get(material, 0)
+                        
+                        # If serial qty exceeds delivery qty, mark it
+                        if serial_qty > delivery_qty and delivery_qty > 0:
+                            exceeds_expected = True
+                            break
+                    
+                    # Mark the row if any material exceeds expected
+                    if exceeds_expected:
+                        agg.at[idx, 'scanned_exceeds_expected'] = True
+    else:
+        logging.warning(f"Missing required columns for detailed quantity comparison. Using simpler approach.")
+        
+        # Fallback to simpler approach if we don't have all required columns
+        delivery_counts = {}
+        
+        # Group by delivery to get total counts from serial_df
+        if delivery_col in df_serial.columns:
+            serial_delivery_counts = df_serial.groupby(delivery_col).size().to_dict()
+            
+            # Store sanitized delivery numbers for comparison
+            for delivery, count in serial_delivery_counts.items():
+                sanitized_delivery = sanitize_delivery_number(delivery)
+                if sanitized_delivery:
+                    delivery_counts[sanitized_delivery] = count
+        
+        # Compare counts for each delivery
+        for idx, row in agg.iterrows():
+            delivery_num = sanitize_delivery_number(row[delivery_col])
+            if delivery_num and delivery_num in delivery_counts:
+                serial_count = delivery_counts[delivery_num]
+                delivery_count = row['delivery_total_packages'] if not pd.isna(row['delivery_total_packages']) else 0
+                
+                # If serial count exceeds delivery count, mark it
+                if serial_count > delivery_count and delivery_count > 0:
+                    agg.at[idx, 'scanned_exceeds_expected'] = True
+    
+    # For rows where scanned exceeds expected, calculate percentage based on serial counts
+    exceeds_mask = agg['scanned_exceeds_expected'] & mask
+    
+    # For normal cases, calculate progress as before
+    agg.loc[mask & ~exceeds_mask, 'progress_percentage'] = np.where(
+        agg.loc[mask & ~exceeds_mask, 'delivery_total_packages'] > 0,
+        (agg.loc[mask & ~exceeds_mask, 'scanned_packages'] / agg.loc[mask & ~exceeds_mask, 'delivery_total_packages']) * 100,
         0
     )
+    
+    # For cases where scanned exceeds expected, calculate based on status and qty in serial_df
+    for idx, row in agg[exceeds_mask].iterrows():
+        delivery_num = sanitize_delivery_number(row[delivery_col])
+        if delivery_num:
+            # Get all records for this delivery from serial_df
+            delivery_serials = df_serial[df_serial[delivery_col] == row[delivery_col]]
+            
+            # Skip if no serials found
+            if delivery_serials.empty:
+                continue
+            
+            # If we have qty column, use it for weighted calculation
+            if qty_col in delivery_serials.columns:
+                # Group by status and sum the quantities
+                status_qty = delivery_serials.groupby(status_col)[qty_col].sum()
+                
+                # Calculate total qty (both ASH and SHP)
+                total_qty = status_qty.sum()
+                
+                # Calculate shipped and picked quantities
+                shipped_qty = status_qty.get('SHP', 0)
+                ash_qty = status_qty.get('ASH', 0)
+                
+                # Calculate progress based on status and qty
+                if total_qty > 0:
+                    # If we have both ASH and SHP, calculate percentage based on both
+                    progress = ((ash_qty + shipped_qty) / total_qty) * 100
+                    agg.at[idx, 'progress_percentage'] = progress
+            else:
+                # Fallback to count-based calculation if qty column not available
+                status_counts = delivery_serials[status_col].value_counts()
+                
+                # Calculate total scanned (both ASH and SHP)
+                total_scanned = status_counts.sum()
+                
+                # Calculate shipped and picked counts
+                shipped_count = status_counts.get('SHP', 0)
+                ash_count = status_counts.get('ASH', 0)
+                
+                # Calculate progress based on status
+                if total_scanned > 0:
+                    # If we have both ASH and SHP, calculate percentage based on both
+                    progress = ((ash_count + shipped_count) / total_scanned) * 100
+                    agg.at[idx, 'progress_percentage'] = progress
     
     # If all items are shipped, set progress to 100%
     all_shipped_mask = (agg['shipped_count'] > 0) & (agg['assigned to shipper_count'] == 0)
     agg.loc[all_shipped_mask, 'progress_percentage'] = 100.0
+    
+    # Clean up temporary column
+    if 'scanned_exceeds_expected' in agg.columns:
+        agg = agg.drop('scanned_exceeds_expected', axis=1)
     
     # Round percentage to 2 decimal places
     agg['progress_percentage'] = agg['progress_percentage'].round(2)

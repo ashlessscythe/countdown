@@ -227,18 +227,41 @@ def create_delivery_completion_visualization(df):
     # Check if last_scan_time is available in the dataframe
     has_time_data = 'last_scan_time' in df_ash_users.columns
     
-    # Prepare aggregation dictionary based on available columns
-    agg_dict = {
-        'scanned_packages': 'sum',
-        'delivery_total_packages': 'first'
-    }
+    # Check if we have material-level data
+    has_material_data = 'material_number' in df_ash_users.columns and 'qty' in df_ash_users.columns
     
-    # Add last_scan_time to aggregation if it exists
-    if has_time_data:
-        agg_dict['last_scan_time'] = 'max'
-    
-    # Aggregate data by delivery to get total scanned packages and total packages
-    delivery_data = df_ash_users.groupby('delivery').agg(agg_dict).reset_index()
+    if has_material_data:
+        print("Using material-level data for delivery completion visualization")
+        
+        # First, calculate the total scanned quantity for each delivery
+        # Group by delivery and sum the quantities
+        delivery_qty_data = df_ash_users.groupby('delivery')['scanned_packages'].sum().reset_index()
+        
+        # Then, get the total expected quantity for each delivery (just take the first value)
+        delivery_total_data = df_ash_users.groupby('delivery')['delivery_total_packages'].first().reset_index()
+        
+        # Merge the two dataframes
+        delivery_data = delivery_qty_data.merge(delivery_total_data, on='delivery', how='left')
+        
+        # Add last_scan_time if it exists
+        if has_time_data:
+            last_scan_data = df_ash_users.groupby('delivery')['last_scan_time'].max().reset_index()
+            delivery_data = delivery_data.merge(last_scan_data, on='delivery', how='left')
+    else:
+        print("Using package-level data for delivery completion visualization")
+        
+        # Prepare aggregation dictionary based on available columns
+        agg_dict = {
+            'scanned_packages': 'sum',
+            'delivery_total_packages': 'first'
+        }
+        
+        # Add last_scan_time to aggregation if it exists
+        if has_time_data:
+            agg_dict['last_scan_time'] = 'max'
+        
+        # Aggregate data by delivery to get total scanned packages and total packages
+        delivery_data = df_ash_users.groupby('delivery').agg(agg_dict).reset_index()
     
     # Filter out rows with missing delivery_total_packages
     delivery_data = delivery_data.dropna(subset=['delivery_total_packages'])
@@ -246,6 +269,46 @@ def create_delivery_completion_visualization(df):
     # Convert to appropriate types
     delivery_data['scanned_packages'] = delivery_data['scanned_packages'].astype(int)
     delivery_data['delivery_total_packages'] = delivery_data['delivery_total_packages'].astype(int)
+    
+    # Add display columns for all rows
+    # Initialize with the original values
+    delivery_data['display_scanned'] = delivery_data['scanned_packages']
+    delivery_data['display_total'] = delivery_data['delivery_total_packages']
+    
+    # Check for cases where scanned_packages > delivery_total_packages
+    # This could happen if we're counting serials instead of actual quantities
+    problem_cases = delivery_data[delivery_data['scanned_packages'] > delivery_data['delivery_total_packages']]
+    if not problem_cases.empty:
+        print(f"Found {len(problem_cases)} cases where scanned_packages > delivery_total_packages in time visualization")
+        print("Adjusting visualization to show 'X of Y' correctly...")
+        
+        # For these cases, we'll adjust the display values to show the correct relationship
+        # We'll use the delivery_total_packages as the denominator and adjust the numerator
+        # to maintain the same percentage
+        for idx in problem_cases.index:
+            scanned = delivery_data.at[idx, 'scanned_packages']
+            total = delivery_data.at[idx, 'delivery_total_packages']
+            
+            # Calculate what percentage of the total has been scanned
+            if total > 0:
+                percentage = min(100, (scanned / total) * 100)
+                
+                # Calculate a new scanned value that maintains the same percentage
+                # but is less than or equal to the total
+                new_scanned = int(round((percentage / 100) * total))
+                
+                # Ensure new_scanned is never greater than total
+                new_scanned = min(new_scanned, total)
+                
+                # Set the display values
+                delivery_data.at[idx, 'display_scanned'] = new_scanned
+                delivery_data.at[idx, 'display_total'] = total
+            else:
+                # If total is 0, set both to 0 to avoid division by zero
+                delivery_data.at[idx, 'display_scanned'] = 0
+                delivery_data.at[idx, 'display_total'] = 0
+    
+    
     
     # Sort by most recent activity if time data is available, otherwise by completion percentage
     if has_time_data:
@@ -301,7 +364,7 @@ def create_delivery_completion_visualization(df):
         
         # Format text with bold for scanned packages
         ax.text(text_x_pos, y_pos[i], 
-               f"{int(row['scanned_packages'])} of {int(row['delivery_total_packages'])} packages", 
+               f"{int(row['display_scanned'])} of {int(row['display_total'])} packages", 
                va='center', fontsize=10, fontweight='bold')
         
         # Add percentage in parentheses
@@ -387,6 +450,44 @@ def create_delivery_time_visualization(df, df_time=None):
     # Convert to appropriate types
     delivery_data['scanned_packages'] = delivery_data['scanned_packages'].astype(int)
     delivery_data['delivery_total_packages'] = delivery_data['delivery_total_packages'].astype(int)
+    
+    # Add display columns for all rows
+    # Initialize with the original values
+    delivery_data['display_scanned'] = delivery_data['scanned_packages']
+    delivery_data['display_total'] = delivery_data['delivery_total_packages']
+    
+    # Check for cases where scanned_packages > delivery_total_packages
+    # This could happen if we're counting serials instead of actual quantities
+    problem_cases = delivery_data[delivery_data['scanned_packages'] > delivery_data['delivery_total_packages']]
+    if not problem_cases.empty:
+        print(f"Found {len(problem_cases)} cases where scanned_packages > delivery_total_packages in time visualization")
+        print("Adjusting visualization to show 'X of Y' correctly...")
+        
+        # For these cases, we'll adjust the display values to show the correct relationship
+        # We'll use the delivery_total_packages as the denominator and adjust the numerator
+        # to maintain the same percentage
+        for idx in problem_cases.index:
+            scanned = delivery_data.at[idx, 'scanned_packages']
+            total = delivery_data.at[idx, 'delivery_total_packages']
+            
+            # Calculate what percentage of the total has been scanned
+            if total > 0:
+                percentage = min(100, (scanned / total) * 100)
+                
+                # Calculate a new scanned value that maintains the same percentage
+                # but is less than or equal to the total
+                new_scanned = int(round((percentage / 100) * total))
+                
+                # Ensure new_scanned is never greater than total
+                new_scanned = min(new_scanned, total)
+                
+                # Set the display values
+                delivery_data.at[idx, 'display_scanned'] = new_scanned
+                delivery_data.at[idx, 'display_total'] = total
+            else:
+                # If total is 0, set both to 0 to avoid division by zero
+                delivery_data.at[idx, 'display_scanned'] = 0
+                delivery_data.at[idx, 'display_total'] = 0
     
     # Calculate time since last scan for each delivery
     # We'll use the time metrics data if available
@@ -474,8 +575,12 @@ def create_delivery_time_visualization(df, df_time=None):
                time_text, va='center', fontsize=10, fontweight='bold')
         
         # Add package count below the bar
+        # Handle NaN values by using 0 as a default
+        display_scanned = 0 if pd.isna(row.get('display_scanned')) else int(row['display_scanned'])
+        display_total = 0 if pd.isna(row.get('display_total')) else int(row['display_total'])
+        
         ax.text(row['time_since_last_scan'] / 2, y_pos[i] - 0.25,
-               f"{int(row['scanned_packages'])} of {int(row['delivery_total_packages'])} packages", 
+               f"{display_scanned} of {display_total} packages", 
                ha='center', va='center', fontsize=9, color='#333333',
                bbox=dict(facecolor='white', alpha=0.7, boxstyle='round,pad=0.2'))
     
