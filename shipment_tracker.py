@@ -639,6 +639,8 @@ def process_snapshot():
     # 6. Calculate progress metrics
     # For progress calculation, consider ASH (assigned to shipper) as "picked"
     # If all items are shipped, progress should be 100%
+    
+    # Initialize scanned_packages with assigned to shipper count
     agg['scanned_packages'] = agg['assigned to shipper_count']
     
     # Calculate progress percentage
@@ -718,8 +720,21 @@ def process_snapshot():
                     # Track if any material exceeds expected
                     exceeds_expected = False
                     
-                    # Compare quantities for each material
-                    for material in materials:
+                    # Track if all materials have been scanned
+                    all_materials_scanned = True
+                    
+                    # Get all materials from delivery_df for this delivery
+                    delivery_materials = set()
+                    for d_num, mat_dict in delivery_material_delivery_qty.items():
+                        if d_num == delivery_num:
+                            delivery_materials.update(mat_dict.keys())
+                    
+                    # Calculate total qty for all materials in serial_df and delivery_df
+                    total_serial_qty = 0
+                    total_delivery_qty = 0
+                    
+                    # Check if all materials in delivery_df have been scanned
+                    for material in delivery_materials:
                         if pd.isna(material):
                             continue
                             
@@ -729,14 +744,27 @@ def process_snapshot():
                         # Get delivery qty for this material
                         delivery_qty = delivery_material_delivery_qty.get(delivery_num, {}).get(material, 0)
                         
+                        # Add to totals
+                        total_serial_qty += serial_qty
+                        total_delivery_qty += delivery_qty
+                        
                         # If serial qty exceeds delivery qty, mark it
                         if serial_qty > delivery_qty and delivery_qty > 0:
                             exceeds_expected = True
-                            break
+                    
+                    # If total serial qty equals or exceeds total delivery qty, consider all materials scanned
+                    if total_serial_qty >= total_delivery_qty and total_delivery_qty > 0:
+                        all_materials_scanned = True
+                    else:
+                        all_materials_scanned = False
                     
                     # Mark the row if any material exceeds expected
                     if exceeds_expected:
                         agg.at[idx, 'scanned_exceeds_expected'] = True
+                    
+                    # If all materials have been scanned, set scanned_packages to delivery_total_packages
+                    if all_materials_scanned and not pd.isna(row['delivery_total_packages']):
+                        agg.at[idx, 'scanned_packages'] = row['delivery_total_packages']
     else:
         logging.warning(f"Missing required columns for detailed quantity comparison. Using simpler approach.")
         
@@ -773,6 +801,10 @@ def process_snapshot():
         (agg.loc[mask & ~exceeds_mask, 'scanned_packages'] / agg.loc[mask & ~exceeds_mask, 'delivery_total_packages']) * 100,
         0
     )
+    
+    # For cases where scanned_packages equals delivery_total_packages, set progress to 100%
+    equal_mask = (agg['scanned_packages'] == agg['delivery_total_packages']) & (agg['delivery_total_packages'] > 0)
+    agg.loc[equal_mask, 'progress_percentage'] = 100.0
     
     # For cases where scanned exceeds expected, calculate based on status and qty in serial_df
     for idx, row in agg[exceeds_mask].iterrows():
