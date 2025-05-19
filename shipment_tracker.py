@@ -17,6 +17,7 @@ The tool:
 import os
 import time
 import logging
+import re
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -37,6 +38,59 @@ def get_latest_file(directory, pattern="*.xlsx"):
     if not files:
         return None
     return max(files, key=lambda f: f.stat().st_mtime)
+
+def sanitize_column_headers(df):
+    """
+    Sanitize column headers and convert them to snake_case.
+    
+    Args:
+        df (DataFrame): DataFrame with headers to sanitize
+        
+    Returns:
+        DataFrame: DataFrame with sanitized headers
+    """
+    # Create a mapping of original column names to sanitized names
+    sanitized_columns = {}
+    
+    for col in df.columns:
+        # Convert to string in case it's not already
+        col_str = str(col)
+        
+        # Replace special characters and spaces with underscores
+        sanitized = re.sub(r'[^a-zA-Z0-9]', '_', col_str)
+        
+        # Convert to lowercase
+        sanitized = sanitized.lower()
+        
+        # Replace multiple underscores with a single underscore
+        sanitized = re.sub(r'_+', '_', sanitized)
+        
+        # Remove leading and trailing underscores
+        sanitized = sanitized.strip('_')
+        
+        # If empty or starts with a digit, prepend 'col_'
+        if not sanitized or sanitized[0].isdigit():
+            sanitized = f"col_{sanitized}"
+            
+        # Handle duplicate column names by appending a number
+        base_sanitized = sanitized
+        counter = 1
+        while sanitized in sanitized_columns.values():
+            sanitized = f"{base_sanitized}_{counter}"
+            counter += 1
+            
+        sanitized_columns[col] = sanitized
+    
+    # Rename the columns
+    df = df.rename(columns=sanitized_columns)
+    
+    # Log the column name changes
+    logging.info("Sanitized column headers to snake_case format")
+    for original, sanitized in sanitized_columns.items():
+        if original != sanitized:
+            logging.debug(f"Column renamed: '{original}' -> '{sanitized}'")
+    
+    return df
 
 def sanitize_delivery_number(delivery):
     """
@@ -65,26 +119,30 @@ def ensure_timestamp_column(df):
     Returns:
         bool: True if timestamp column exists or was created, False otherwise
     """
-    if 'Timestamp' not in df.columns:
-        if 'Created on' in df.columns and 'Time' in df.columns:
-            logging.info("Creating Timestamp column from 'Created on' and 'Time' columns")
+    if 'timestamp' not in df.columns:
+        # Check for original or sanitized column names
+        created_on_col = next((col for col in df.columns if col in ['created_on', 'Created on']), None)
+        time_col = next((col for col in df.columns if col in ['time', 'Time']), None)
+        
+        if created_on_col and time_col:
+            logging.info(f"Creating timestamp column from '{created_on_col}' and '{time_col}' columns")
             
             # First ensure both columns are strings
-            created_on_str = df['Created on'].astype(str)
-            time_str = df['Time'].astype(str)
+            created_on_str = df[created_on_col].astype(str)
+            time_str = df[time_col].astype(str)
             
             # Combine date and time columns to create a timestamp
-            df['Timestamp'] = created_on_str + ' ' + time_str
+            df['timestamp'] = created_on_str + ' ' + time_str
             
             try:
-                df['Timestamp'] = pd.to_datetime(df['Timestamp'])
-                logging.info(f"Converted timestamps to datetime. Sample: {df['Timestamp'].head(3)}")
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+                logging.info(f"Converted timestamps to datetime. Sample: {df['timestamp'].head(3)}")
                 return True
             except Exception as e:
                 logging.error(f"Error converting timestamp to datetime: {e}")
                 return False
         else:
-            logging.warning("Cannot create timestamp: 'Created on' or 'Time' columns missing")
+            logging.warning(f"Cannot create timestamp: Required columns missing. Available columns: {df.columns.tolist()}")
             return False
     return True
 
@@ -100,10 +158,18 @@ def filter_by_warehouse(df, warehouse_code):
         DataFrame: Filtered DataFrame
     """
     pre_length = len(df)
-    df_filtered = df[df['Warehouse Number'] == warehouse_code]
-    logging.info(f"Filtered data to warehouse {warehouse_code}. length before: {pre_length}, after: {len(df_filtered)}")
-    return df_filtered
-
+    
+    # Check for original or sanitized column name
+    warehouse_col = next((col for col in df.columns if col in ['warehouse_number', 'Warehouse Number']), None)
+    
+    if warehouse_col:
+        df_filtered = df[df[warehouse_col] == warehouse_code]
+        logging.info(f"Filtered data to warehouse {warehouse_code}. length before: {pre_length}, after: {len(df_filtered)}")
+        return df_filtered
+    else:
+        logging.warning(f"Warehouse column not found. Available columns: {df.columns.tolist()}")
+        return df
+    
 def filter_by_parent_serial(df):
     """
     Filter dataframe to only include records with no parent serial number.
@@ -115,9 +181,17 @@ def filter_by_parent_serial(df):
         DataFrame: Filtered DataFrame
     """
     pre_length = len(df)
-    df_filtered = df[df['Parent serial number'].isna() | (df['Parent serial number'] == '')]
-    logging.info(f"Filtered data to only include parent serial numbers. length before: {pre_length}, after: {len(df_filtered)}")
-    return df_filtered
+    
+    # Check for original or sanitized column name
+    parent_serial_col = next((col for col in df.columns if col in ['parent_serial_number', 'Parent serial number']), None)
+    
+    if parent_serial_col:
+        df_filtered = df[df[parent_serial_col].isna() | (df[parent_serial_col] == '')]
+        logging.info(f"Filtered data to only include parent serial numbers. length before: {pre_length}, after: {len(df_filtered)}")
+        return df_filtered
+    else:
+        logging.warning(f"Parent serial column not found. Available columns: {df.columns.tolist()}")
+        return df
 
 def filter_by_time_window(df, reference_time, window_minutes):
     """
@@ -131,13 +205,13 @@ def filter_by_time_window(df, reference_time, window_minutes):
     Returns:
         DataFrame: Filtered DataFrame
     """
-    if 'Timestamp' not in df.columns:
+    if 'timestamp' not in df.columns:
         if not ensure_timestamp_column(df):
             return df
     
     pre_length = len(df)
     cutoff_time = reference_time - pd.Timedelta(minutes=window_minutes)
-    df_filtered = df[df['Timestamp'] >= cutoff_time]
+    df_filtered = df[df['timestamp'] >= cutoff_time]
     logging.info(f"Filtered data to only include records within the last {window_minutes} minutes")
     logging.info(f"length before: {pre_length}, after: {len(df_filtered)}")
     return df_filtered
@@ -154,12 +228,19 @@ def deduplicate_serial_status(df):
         DataFrame: Deduplicated DataFrame
     """
     pre_length = len(df)
-    if 'Serial #' in df.columns and 'Status' in df.columns:
-        df_deduped = df.drop_duplicates(subset=['Serial #', 'Status'], keep='first')
-        logging.info("Deduplicated serial data by Serial # and Status (keeping most recent timestamp)")
+    
+    # Check for original or sanitized column names
+    serial_col = next((col for col in df.columns if col in ['serial', 'Serial #']), None)
+    status_col = next((col for col in df.columns if col in ['status', 'Status']), None)
+    
+    if serial_col and status_col:
+        df_deduped = df.drop_duplicates(subset=[serial_col, status_col], keep='first')
+        logging.info(f"Deduplicated serial data by {serial_col} and {status_col} (keeping most recent timestamp)")
         logging.info(f"length before: {pre_length}, after: {len(df_deduped)}")
         return df_deduped
-    return df
+    else:
+        logging.warning(f"Serial or Status column not found. Available columns: {df.columns.tolist()}")
+        return df
 
 def process_ash_shp_statuses(df):
     """
@@ -174,12 +255,21 @@ def process_ash_shp_statuses(df):
     Returns:
         DataFrame: Processed DataFrame, set of ASH users
     """
+    # Check for original or sanitized column names
+    serial_col = next((col for col in df.columns if col in ['serial', 'Serial #']), None)
+    status_col = next((col for col in df.columns if col in ['status', 'Status']), None)
+    created_by_col = next((col for col in df.columns if col in ['created_by', 'Created by']), None)
+    
+    if not all([serial_col, status_col, created_by_col]):
+        logging.warning(f"Required columns not found. Available columns: {df.columns.tolist()}")
+        return df, set()
+    
     # Identify users who do ASH (for filtering visualizations later)
-    ash_users = set(df[df['Status'] == 'ASH']['Created by'])
+    ash_users = set(df[df[status_col] == 'ASH'][created_by_col])
     
     # Find serials that have both ASH and SHP records
     # Group by Serial # and check if both ASH and SHP statuses exist
-    serial_status_counts = df.groupby('Serial #')['Status'].apply(set)
+    serial_status_counts = df.groupby(serial_col)[status_col].apply(set)
     
     # Serials with both ASH and SHP
     serials_with_both = serial_status_counts[serial_status_counts.apply(lambda x: 'ASH' in x and 'SHP' in x)].index
@@ -188,15 +278,15 @@ def process_ash_shp_statuses(df):
     serials_with_only_shp = serial_status_counts[serial_status_counts.apply(lambda x: 'SHP' in x and 'ASH' not in x)].index
     
     # Remove SHP records for serials that only have SHP (no corresponding ASH)
-    df = df[~((df['Serial #'].isin(serials_with_only_shp)) & 
-             (df['Status'] == 'SHP'))]
+    df = df[~((df[serial_col].isin(serials_with_only_shp)) & 
+             (df[status_col] == 'SHP'))]
     
     # For serials with both ASH and SHP, keep only the SHP records (count as shipped)
-    df = df[~((df['Serial #'].isin(serials_with_both)) & 
-             (df['Status'] == 'ASH'))]
+    df = df[~((df[serial_col].isin(serials_with_both)) & 
+             (df[status_col] == 'ASH'))]
     
     # Add a flag to identify users who do ASH
-    df['is_ash_user'] = df['Created by'].isin(ash_users)
+    df['is_ash_user'] = df[created_by_col].isin(ash_users)
     
     return df, ash_users
 
@@ -211,24 +301,29 @@ def apply_shp_ceiling_timestamp(df):
     Returns:
         DataFrame: Processed DataFrame
     """
-    if 'Timestamp' not in df.columns:
+    # Check for original or sanitized column names
+    serial_col = next((col for col in df.columns if col in ['serial', 'Serial #']), None)
+    status_col = next((col for col in df.columns if col in ['status', 'Status']), None)
+    
+    if not all([serial_col, status_col]) or 'timestamp' not in df.columns:
+        logging.warning(f"Required columns not found. Available columns: {df.columns.tolist()}")
         return df
     
     # Get serials with SHP status
-    serials_with_shp = df[df['Status'] == 'SHP']
+    serials_with_shp = df[df[status_col] == 'SHP']
     
     if not serials_with_shp.empty:
         # Get the latest SHP timestamp for each serial
-        latest_shp = serials_with_shp.groupby('Serial #')['Timestamp'].max()
+        latest_shp = serials_with_shp.groupby(serial_col)['timestamp'].max()
         
         # More efficient approach using vectorized operations
         # Create a temporary column with the SHP ceiling timestamp for each serial
-        df['shp_ceiling'] = df['Serial #'].map(latest_shp)
+        df['shp_ceiling'] = df[serial_col].map(latest_shp)
         
         # Keep only rows where either:
         # 1. The serial doesn't have a SHP ceiling timestamp, or
         # 2. The timestamp is not after the SHP ceiling
-        df = df[(df['shp_ceiling'].isna()) | (df['Timestamp'] <= df['shp_ceiling'])]
+        df = df[(df['shp_ceiling'].isna()) | (df['timestamp'] <= df['shp_ceiling'])]
         
         # Drop the temporary column
         df = df.drop('shp_ceiling', axis=1)
@@ -258,8 +353,15 @@ def calculate_time_metrics(df_serial, reference_time=None):
     if not ensure_timestamp_column(df_serial):
         return pd.DataFrame()
     
+    # Check for original or sanitized column name
+    created_by_col = next((col for col in df_serial.columns if col in ['created_by', 'Created by']), None)
+    
+    if not created_by_col:
+        logging.warning(f"Created by column not found. Available columns: {df_serial.columns.tolist()}")
+        return pd.DataFrame()
+    
     # Sort by user and timestamp
-    df_sorted = df_serial.sort_values(['Created by', 'Timestamp'])
+    df_sorted = df_serial.sort_values([created_by_col, 'timestamp'])
     
     # Group by user to calculate time differences between consecutive scans
     time_metrics = []
@@ -272,19 +374,19 @@ def calculate_time_metrics(df_serial, reference_time=None):
         now = reference_time.replace(tzinfo=None)
         logging.info(f"Using reference time from filename for calculations: {now}")
     
-    for user, group in df_sorted.groupby('Created by'):
+    for user, group in df_sorted.groupby(created_by_col):
         # Skip if user has less than 2 scans
         if len(group) < 2:
             continue
             
         # Calculate time differences between consecutive scans
-        group = group.sort_values('Timestamp')
+        group = group.sort_values('timestamp')
         
         # Ensure timestamps are timezone-naive for consistent comparison
-        if group['Timestamp'].iloc[0].tzinfo is not None:
-            group['Timestamp'] = group['Timestamp'].dt.tz_localize(None)
+        if group['timestamp'].iloc[0].tzinfo is not None:
+            group['timestamp'] = group['timestamp'].dt.tz_localize(None)
             
-        time_diffs = group['Timestamp'].diff().dropna()
+        time_diffs = group['timestamp'].diff().dropna()
         
         # Convert time differences to seconds
         time_diffs_seconds = time_diffs.dt.total_seconds()
@@ -295,7 +397,7 @@ def calculate_time_metrics(df_serial, reference_time=None):
         else:
             avg_time_between_scans = time_diffs_seconds.mean()
             
-        last_scan_time = group['Timestamp'].max()
+        last_scan_time = group['timestamp'].max()
         
         # Ensure last_scan_time is timezone-naive for comparison with now
         if last_scan_time.tzinfo is not None:
@@ -403,10 +505,17 @@ def process_snapshot():
         reference_time = delivery_timestamp
         logging.info(f"Using reference time from delivery file: {reference_time}")
 
-    # 2. Read Excel files
+    # 2. Read Excel files and sanitize column headers
     try:
         df_serial = pd.read_excel(serial_file)
+        df_serial = sanitize_column_headers(df_serial)
+        
         df_delivery = pd.read_excel(delivery_file)
+        df_delivery = sanitize_column_headers(df_delivery)
+        
+        logging.info(f"Sanitized column headers for both dataframes")
+        logging.info(f"Serial dataframe columns: {df_serial.columns.tolist()}")
+        logging.info(f"Delivery dataframe columns: {df_delivery.columns.tolist()}")
     except Exception as e:
         logging.error(f"Error reading Excel files: {e}")
         return
@@ -420,8 +529,8 @@ def process_snapshot():
     ensure_timestamp_column(df_serial)
     
     # Sort by timestamp in descending order (newest first)
-    if 'Timestamp' in df_serial.columns:
-        df_serial = df_serial.sort_values('Timestamp', ascending=False)
+    if 'timestamp' in df_serial.columns:
+        df_serial = df_serial.sort_values('timestamp', ascending=False)
         logging.info("Sorted serial data by timestamp in descending order (newest first)")
     
     # Deduplicate by serial number and status
@@ -431,21 +540,36 @@ def process_snapshot():
     if reference_time:
         df_serial = filter_by_time_window(df_serial, reference_time, config.WINDOW_MINUTES)
     
-    # Map status codes to text
-    df_serial['StatusText'] = df_serial['Status'].map(config.STATUS_MAPPING)
+    # Check for original or sanitized column name
+    status_col = next((col for col in df_serial.columns if col in ['status', 'Status']), None)
     
-    # Process ASH and SHP statuses
-    df_serial, ash_users = process_ash_shp_statuses(df_serial)
-    
-    # Apply timestamp ceiling for serials where SHP is the last status
-    df_serial = apply_shp_ceiling_timestamp(df_serial)
+    if status_col:
+        # Map status codes to text
+        df_serial['status_text'] = df_serial[status_col].map(config.STATUS_MAPPING)
+        
+        # Process ASH and SHP statuses
+        df_serial, ash_users = process_ash_shp_statuses(df_serial)
+        
+        # Apply timestamp ceiling for serials where SHP is the last status
+        df_serial = apply_shp_ceiling_timestamp(df_serial)
+    else:
+        logging.warning(f"Status column not found. Available columns: {df_serial.columns.tolist()}")
+        ash_users = set()
 
     # 4. Create a base aggregation by user and delivery
-    agg = df_serial.groupby(['Created by', 'Delivery']).size().reset_index(name='total_records')
+    # Check for original or sanitized column names
+    created_by_col = next((col for col in df_serial.columns if col in ['created_by', 'Created by']), None)
+    delivery_col = next((col for col in df_serial.columns if col in ['delivery', 'Delivery']), None)
+    
+    if not all([created_by_col, delivery_col]):
+        logging.warning(f"Required columns not found. Available columns: {df_serial.columns.tolist()}")
+        return
+    
+    agg = df_serial.groupby([created_by_col, delivery_col]).size().reset_index(name='total_records')
     
     # Get status breakdown (shipped vs picked counts)
     # This gives us counts by status for each user-delivery combination
-    status_counts = df_serial.groupby(['Created by', 'Delivery', 'StatusText']).size().unstack(fill_value=0)
+    status_counts = df_serial.groupby([created_by_col, delivery_col, 'status_text']).size().unstack(fill_value=0)
     
     # Ensure both status columns exist, even if no data
     for status in config.STATUS_MAPPING.values():
@@ -457,7 +581,7 @@ def process_snapshot():
     status_counts = status_counts.reset_index()
     
     # Merge status counts with the aggregated data
-    agg = agg.merge(status_counts, on=['Created by', 'Delivery'], how='left')
+    agg = agg.merge(status_counts, on=[created_by_col, delivery_col], how='left')
     agg = agg.fillna(0)  # Fill NaN values with 0 for status counts
     
     # Drop the total_records column as it's not needed
@@ -465,38 +589,52 @@ def process_snapshot():
     
     # 5. Add total delivery packages from VL06O
     # Sanitize delivery numbers in both dataframes to ensure consistent format
-    agg['delivery_clean'] = agg['Delivery'].apply(sanitize_delivery_number)
-    df_delivery['delivery_clean'] = df_delivery['Delivery'].apply(sanitize_delivery_number)
+    agg['delivery_clean'] = agg[delivery_col].apply(sanitize_delivery_number)
     
-    # Check for duplicate delivery numbers in delivery data
-    delivery_clean_counts = df_delivery['delivery_clean'].value_counts()
-    duplicate_deliveries = delivery_clean_counts[delivery_clean_counts > 1].index.tolist()
+    # Check for original or sanitized column name for delivery in df_delivery
+    delivery_col_delivery = next((col for col in df_delivery.columns if col in ['delivery', 'Delivery']), None)
     
-    if duplicate_deliveries:
-        logging.warning(f"Found {len(duplicate_deliveries)} duplicate delivery_clean values in df_delivery")
+    if delivery_col_delivery:
+        df_delivery['delivery_clean'] = df_delivery[delivery_col_delivery].apply(sanitize_delivery_number)
         
-        # For each delivery, keep only one row with the total package count
-        # Group by delivery_clean and take the first row for each group
-        df_delivery_deduped = df_delivery.groupby('delivery_clean').first().reset_index()
+        # Check for duplicate delivery numbers in delivery data
+        delivery_clean_counts = df_delivery['delivery_clean'].value_counts()
+        duplicate_deliveries = delivery_clean_counts[delivery_clean_counts > 1].index.tolist()
         
-        logging.info(f"Deduplicated delivery data. Shape before: {df_delivery.shape}, after: {df_delivery_deduped.shape}")
+        # Check for original or sanitized column name for number of packages
+        packages_col = next((col for col in df_delivery.columns if col in ['number_of_packages', 'Number of packages']), None)
         
-        # Merge delivery totals using the sanitized delivery numbers
-        df_delivery_matched = df_delivery_deduped[['delivery_clean', 'Number of packages']]
-        
-        logging.info(f"Created package counts based on matching materials. Shape: {df_delivery_matched.shape}")
-        
-        # Merge delivery totals using the sanitized delivery numbers and matched package counts
-        agg = agg.merge(df_delivery_matched, on='delivery_clean', how='left')
+        if packages_col:
+            if duplicate_deliveries:
+                logging.warning(f"Found {len(duplicate_deliveries)} duplicate delivery_clean values in df_delivery")
+                
+                # For each delivery, keep only one row with the total package count
+                # Group by delivery_clean and take the first row for each group
+                df_delivery_deduped = df_delivery.groupby('delivery_clean').first().reset_index()
+                
+                logging.info(f"Deduplicated delivery data. Shape before: {df_delivery.shape}, after: {df_delivery_deduped.shape}")
+                
+                # Merge delivery totals using the sanitized delivery numbers
+                df_delivery_matched = df_delivery_deduped[['delivery_clean', packages_col]]
+                
+                logging.info(f"Created package counts based on matching materials. Shape: {df_delivery_matched.shape}")
+                
+                # Merge delivery totals using the sanitized delivery numbers and matched package counts
+                agg = agg.merge(df_delivery_matched, on='delivery_clean', how='left')
+            else:
+                # If no duplicates, proceed as before
+                agg = agg.merge(df_delivery[['delivery_clean', packages_col]], 
+                               on='delivery_clean', how='left')
+            
+            agg = agg.rename(columns={packages_col: 'delivery_total_packages'})
+        else:
+            logging.warning(f"Number of packages column not found. Available columns: {df_delivery.columns.tolist()}")
     else:
-        # If no duplicates, proceed as before
-        agg = agg.merge(df_delivery[['delivery_clean', 'Number of packages']], 
-                       on='delivery_clean', how='left')
-    
-    agg = agg.rename(columns={'Number of packages': 'delivery_total_packages'})
+        logging.warning(f"Delivery column not found in delivery dataframe. Available columns: {df_delivery.columns.tolist()}")
     
     # Drop the temporary column used for merging
-    agg = agg.drop('delivery_clean', axis=1)
+    if 'delivery_clean' in agg.columns:
+        agg = agg.drop('delivery_clean', axis=1)
     
     # 6. Calculate progress metrics
     # For progress calculation, consider ASH (assigned to shipper) as "picked"
@@ -557,10 +695,10 @@ def process_snapshot():
         time_metrics_df = pd.DataFrame()
     
     # Add the is_ash_user flag to the aggregated data
-    agg['is_ash_user'] = agg['Created by'].isin(ash_users)
+    agg['is_ash_user'] = agg['created_by'].isin(ash_users)
     
     # 8. Rename columns for final output
-    agg = agg.rename(columns={'Created by': 'user', 'Delivery': 'delivery'})
+    agg = agg.rename(columns={'created_by': 'user', 'delivery': 'delivery'})
     
     # 9. Compare with previous output to detect changes
     latest_out = get_latest_file(config.OUT_DIR, "output_*.parquet")
