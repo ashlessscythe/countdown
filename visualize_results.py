@@ -529,9 +529,9 @@ def create_delivery_time_visualization(df, df_time=None):
             delivery_data.at[idx, 'display_scanned'] = total
             
         # Special case for delivery 78247870.0 - set display_scanned to match display_total
-        for idx, row in delivery_data.iterrows():
-            if row['delivery'] == 78247870.0:
-                delivery_data.at[idx, 'display_scanned'] = delivery_data.at[idx, 'display_total']
+        # for idx, row in delivery_data.iterrows():
+        #     if row['delivery'] == 78247870.0:
+        #         delivery_data.at[idx, 'display_scanned'] = delivery_data.at[idx, 'display_total']
     
     # Calculate time since last scan for each delivery
     # We'll use the time metrics data if available
