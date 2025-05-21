@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
 import config
+import func
 from shipment_tracker import get_latest_file
 
 def read_latest_output():
@@ -31,6 +32,16 @@ def read_latest_time_metrics():
         return None
     
     print(f"Reading time metrics from {latest_file}")
+    return pd.read_parquet(latest_file)
+
+def read_latest_material_completion():
+    """Read the latest material completion Parquet file."""
+    latest_file = get_latest_file(config.OUT_DIR, "material_completion_*.parquet")
+    if not latest_file:
+        print("No material completion files found. Will generate from source files.")
+        return None
+    
+    print(f"Reading material completion data from {latest_file}")
     return pd.read_parquet(latest_file)
 
 def create_visualizations(df):
@@ -253,7 +264,8 @@ def create_delivery_completion_visualization(df):
         # Prepare aggregation dictionary based on available columns
         agg_dict = {
             'scanned_packages': 'sum',
-            'delivery_total_packages': 'first'
+            'delivery_total_packages': 'first',
+            'overall_pick_status': 'first'  # Get the overall pick status for each delivery
         }
         
         # Add last_scan_time to aggregation if it exists
@@ -281,7 +293,12 @@ def create_delivery_completion_visualization(df):
     
     # Check for cases where scanned_packages > delivery_total_packages
     # This could happen if we're counting serials instead of actual quantities
-    problem_cases = delivery_data[delivery_data['scanned_packages'] > delivery_data['delivery_total_packages']]
+    problem_cases = delivery_data[
+        (delivery_data['scanned_packages'] > delivery_data['delivery_total_packages']) | 
+        # Problem cases should also be where scanned is fewer than delivery_total_packages and overall_pick_status is "C"
+        ((delivery_data['scanned_packages'] < delivery_data['delivery_total_packages']) & 
+         (delivery_data['overall_pick_status'] == 'C'))
+    ]
     
     # Also check for cases where completion_percentage is 100% or very close to it
     # This indicates all materials have been scanned
@@ -325,12 +342,6 @@ def create_delivery_completion_visualization(df):
             total = delivery_data.at[idx, 'delivery_total_packages']
             delivery_data.at[idx, 'display_scanned'] = total
             
-        # Special case for delivery 78247870.0 - set display_scanned to match display_total
-        for idx, row in delivery_data.iterrows():
-            if row['delivery'] == 78247870.0:
-                delivery_data.at[idx, 'display_scanned'] = delivery_data.at[idx, 'display_total']
-    
-    
     
     # Sort by most recent activity if time data is available, otherwise by completion percentage
     if has_time_data:
@@ -455,7 +466,8 @@ def create_delivery_time_visualization(df, df_time=None):
     agg_dict = {
         'scanned_packages': 'sum',
         'delivery_total_packages': 'first',
-        'user': lambda x: list(set(x))  # Get unique users for each delivery
+        'user': lambda x: list(set(x)),  # Get unique users for each delivery
+        'overall_pick_status': 'first'  # Get the overall pick status for each delivery
     }
     
     # Check if customer name is available in the dataframe
@@ -484,8 +496,13 @@ def create_delivery_time_visualization(df, df_time=None):
     
     # Check for cases where scanned_packages > delivery_total_packages
     # This could happen if we're counting serials instead of actual quantities
-    problem_cases = delivery_data[delivery_data['scanned_packages'] > delivery_data['delivery_total_packages']]
-    
+    problem_cases = delivery_data[
+        (delivery_data['scanned_packages'] > delivery_data['delivery_total_packages']) | 
+        # Problem cases should also be where scanned is fewer than delivery_total_packages and overall_pick_status is "C"
+        ((delivery_data['scanned_packages'] < delivery_data['delivery_total_packages']) & 
+         (delivery_data['overall_pick_status'] == 'C'))
+    ]
+
     # Also check for cases where completion_percentage is 100% or very close to it
     # This indicates all materials have been scanned
     complete_cases = delivery_data[delivery_data['completion_percentage'] >= 99.5]
@@ -528,11 +545,6 @@ def create_delivery_time_visualization(df, df_time=None):
             total = delivery_data.at[idx, 'delivery_total_packages']
             delivery_data.at[idx, 'display_scanned'] = total
             
-        # Special case for delivery 78247870.0 - set display_scanned to match display_total
-        # for idx, row in delivery_data.iterrows():
-        #     if row['delivery'] == 78247870.0:
-        #         delivery_data.at[idx, 'display_scanned'] = delivery_data.at[idx, 'display_total']
-    
     # Calculate time since last scan for each delivery
     # We'll use the time metrics data if available
     if df_time is not None and 'last_scan_time' in df_time.columns and 'time_since_last_scan_minutes' in df_time.columns:

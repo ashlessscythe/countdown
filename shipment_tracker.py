@@ -477,6 +477,7 @@ def process_snapshot():
     - Load latest Excel files
     - Filter and process data
     - Output aggregated results if changes detected
+    - Save material completion data for visualization
     """
     # 1. Get latest files
     serial_file = get_latest_file(config.SERIAL_NUMBERS_DIR)
@@ -604,6 +605,9 @@ def process_snapshot():
         # Check for original or sanitized column name for number of packages
         packages_col = next((col for col in df_delivery.columns if col in ['number_of_packages', 'Number of packages']), None)
         
+        # Check for overall pick status column
+        overall_pick_status_col = 'overall_pick_status' if 'overall_pick_status' in df_delivery.columns else None
+        
         if packages_col:
             if duplicate_deliveries:
                 logging.warning(f"Found {len(duplicate_deliveries)} duplicate delivery_clean values in df_delivery")
@@ -616,6 +620,13 @@ def process_snapshot():
                 
                 # Merge delivery totals using the sanitized delivery numbers
                 df_delivery_matched = df_delivery_deduped[['delivery_clean', packages_col]]
+
+                # merge overall pick status if it exists
+                if overall_pick_status_col:
+                    df_delivery_matched = df_delivery_matched.merge(
+                        df_delivery_deduped[['delivery_clean', overall_pick_status_col]],
+                        on='delivery_clean', how='left'
+                    )
                 
                 logging.info(f"Created package counts based on matching materials. Shape: {df_delivery_matched.shape}")
                 
@@ -924,7 +935,101 @@ def process_snapshot():
         except Exception as e:
             logging.error(f"Error comparing with previous output: {e}")
     
-    # 10. Write new output if changes detected
+    # 10. Generate material completion data for visualization
+    material_completion_df = None
+    try:
+        # Check if we have all required columns for material completion
+        if all([qty_col, material_col, delivery_col, status_col]):
+            logging.info("Generating material completion data for visualization")
+            
+            # Filter serial data to only include ASH status
+            df_serial_ash = df_serial[df_serial[status_col] == 'ASH']
+            
+            # Group by material and sum the quantities for ASH status
+            material_ash_qty = df_serial_ash.groupby([material_col, delivery_col])[qty_col].sum().reset_index()
+            
+            # Sanitize delivery numbers for consistent format
+            material_ash_qty['delivery_clean'] = material_ash_qty[delivery_col].apply(sanitize_delivery_number)
+            
+            # Check if we have all required columns for delivery data
+            if all([delivery_col_delivery, delivery_material_col, delivery_qty_col]):
+                # Sanitize delivery numbers in delivery data
+                df_delivery['delivery_clean'] = df_delivery[delivery_col_delivery].apply(sanitize_delivery_number)
+                
+                # Group by material and sum the delivery quantities
+                material_delivery_qty = df_delivery.groupby([delivery_material_col, 'delivery_clean'])[delivery_qty_col].sum().reset_index()
+                
+                # Convert material columns to string for consistent comparison
+                material_ash_qty[material_col] = material_ash_qty[material_col].astype(str)
+                material_delivery_qty[delivery_material_col] = material_delivery_qty[delivery_material_col].astype(str)
+                
+                # Create a mapping of delivery to materials for both dataframes
+                delivery_to_materials_ash = {}
+                for _, row in material_ash_qty.iterrows():
+                    delivery = row['delivery_clean']
+                    material = str(row[material_col]).split('.')[0]  # Remove decimal part
+                    qty = row[qty_col]
+                    
+                    if delivery not in delivery_to_materials_ash:
+                        delivery_to_materials_ash[delivery] = {}
+                    
+                    delivery_to_materials_ash[delivery][material] = qty
+                
+                delivery_to_materials_delivery = {}
+                for _, row in material_delivery_qty.iterrows():
+                    delivery = row['delivery_clean']
+                    material = str(row[delivery_material_col]).split('.')[0]  # Remove decimal part
+                    qty = row[delivery_qty_col]
+                    
+                    if delivery not in delivery_to_materials_delivery:
+                        delivery_to_materials_delivery[delivery] = {}
+                    
+                    delivery_to_materials_delivery[delivery][material] = qty
+                
+                # Find common deliveries
+                common_deliveries = set(delivery_to_materials_ash.keys()) & set(delivery_to_materials_delivery.keys())
+                logging.info(f"Found {len(common_deliveries)} common deliveries for material completion")
+                
+                # For each common delivery, find matching materials
+                material_matches = []
+                
+                for delivery in common_deliveries:
+                    ash_materials = delivery_to_materials_ash[delivery]
+                    delivery_materials = delivery_to_materials_delivery[delivery]
+                    
+                    # Try to match materials by checking if one is a substring of the other
+                    for ash_material, ash_qty in ash_materials.items():
+                        for delivery_material, delivery_qty in delivery_materials.items():
+                            # Check if the material numbers are similar (one is a substring of the other)
+                            if ash_material in delivery_material or delivery_material in ash_material:
+                                material_matches.append({
+                                    'delivery_clean': delivery,
+                                    'material_ash': ash_material,
+                                    'material_delivery': delivery_material,
+                                    'scanned_qty': ash_qty,
+                                    'delivery_qty': delivery_qty
+                                })
+                
+                # Convert to DataFrame
+                if material_matches:
+                    material_completion_df = pd.DataFrame(material_matches)
+                    
+                    # Calculate completion percentage
+                    material_completion_df['completion_percentage'] = (
+                        material_completion_df['scanned_qty'] / material_completion_df['delivery_qty'] * 100
+                    ).clip(0, 100)  # Clip to 0-100% range
+                    
+                    logging.info(f"Generated material completion data with {len(material_completion_df)} records")
+                else:
+                    logging.warning("No matching materials found for material completion visualization")
+            else:
+                logging.warning("Missing required columns in delivery data for material completion")
+        else:
+            logging.warning("Missing required columns in serial data for material completion")
+    except Exception as e:
+        logging.error(f"Error generating material completion data: {e}")
+    
+    # 11. Write new output if changes detected
     if changed:
         # Ensure output directory exists
         Path(config.OUT_DIR).mkdir(exist_ok=True)
@@ -933,6 +1038,7 @@ def process_snapshot():
         timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
         out_path = Path(config.OUT_DIR) / f"output_{timestamp}.parquet"
         time_metrics_path = Path(config.OUT_DIR) / f"time_metrics_{timestamp}.parquet"
+        material_completion_path = Path(config.OUT_DIR) / f"material_completion_{timestamp}.parquet"
         
         # Write to Parquet
         agg.to_parquet(out_path)
@@ -942,6 +1048,11 @@ def process_snapshot():
         if not time_metrics_df.empty:
             time_metrics_df.to_parquet(time_metrics_path)
             logging.info(f"Wrote time metrics file: {time_metrics_path}")
+        
+        # Write material completion data to a separate Parquet file if we have data
+        if material_completion_df is not None and not material_completion_df.empty:
+            material_completion_df.to_parquet(material_completion_path)
+            logging.info(f"Wrote material completion file: {material_completion_path}")
         
         # 11. Cleanup old outputs (keep last 5)
         cleanup_old_files(config.OUT_DIR, "output_*.parquet", 5)
