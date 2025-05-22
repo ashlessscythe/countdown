@@ -1055,8 +1055,13 @@ def process_snapshot():
             logging.info(f"Wrote material completion file: {material_completion_path}")
         
         # 11. Cleanup old outputs (keep last 5)
-        cleanup_old_files(config.OUT_DIR, "output_*.parquet", 5)
-        cleanup_old_files(config.OUT_DIR, "time_metrics_*.parquet", 5)
+        cleanup_old_files(config.OUT_DIR, "output_*.parquet", 2)
+        cleanup_old_files(config.OUT_DIR, "time_metrics_*.parquet", 2)
+        cleanup_old_files(config.OUT_DIR, "material_*.parquet", 2)
+        
+        # 12. Cleanup old exports
+        cleanup_old_files(config.DELIVERY_INFO_DIR, "*_VL06O.xlsx", 5)
+        cleanup_old_files(config.SERIAL_NUMBERS_DIR, "*_ZMDESNR.xlsx", 5)
     else:
         logging.info("No changes detected, skipping output generation")
 

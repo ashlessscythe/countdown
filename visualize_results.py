@@ -436,6 +436,138 @@ def create_delivery_completion_visualization(df):
     
     print(f"Delivery completion visualization saved to {viz_dir.absolute()}")
 
+def create_material_completion_visualization(df_material):
+    """
+    Create visualization showing material completion data.
+    
+    Args:
+        df_material (DataFrame): DataFrame containing the material completion data
+    """
+    if df_material is None or len(df_material) == 0:
+        print("No material completion data to visualize.")
+        return
+    
+    # Print column names to understand the structure
+    print(f"Material completion data columns: {df_material.columns.tolist()}")
+    
+    # Create output directory for visualizations
+    viz_dir = Path(config.VIZ_DIR)
+    viz_dir.mkdir(exist_ok=True)
+    
+    # Check if we have the expected columns
+    required_columns = ['delivery_clean', 'completion_percentage']
+    missing_columns = [col for col in required_columns if col not in df_material.columns]
+    
+    if missing_columns:
+        print(f"Missing required columns for material completion visualization: {missing_columns}")
+        print("Adapting visualization to available columns...")
+        
+        # If delivery_clean is missing but we have delivery, use that instead
+        if 'delivery_clean' in missing_columns and 'delivery' in df_material.columns:
+            df_material['delivery_clean'] = df_material['delivery']
+            missing_columns.remove('delivery_clean')
+        
+        # If we're still missing required columns, we can't proceed
+        if missing_columns:
+            print("Cannot create material completion visualization due to missing columns.")
+            return
+    
+    # Determine quantity columns based on what's available
+    qty_columns = []
+    if 'scanned_qty' in df_material.columns and 'delivery_qty' in df_material.columns:
+        qty_columns = ['scanned_qty', 'delivery_qty']
+    elif 'material_ash' in df_material.columns and 'material_delivery' in df_material.columns:
+        # We have material columns but not quantity columns
+        print("Using material columns for visualization instead of quantity columns")
+        
+    # Group by delivery to get completion statistics
+    agg_dict = {'completion_percentage': ['mean', 'min', 'max', 'count']}
+    
+    # Add quantity columns to aggregation if available
+    for col in qty_columns:
+        agg_dict[col] = 'sum'
+    
+    delivery_stats = df_material.groupby('delivery_clean').agg(agg_dict)
+    
+    # Flatten the multi-index columns
+    delivery_stats.columns = ['_'.join(col).strip() for col in delivery_stats.columns.values]
+    delivery_stats = delivery_stats.reset_index()
+    
+    # Sort by average completion percentage (descending)
+    if 'completion_percentage_mean' in delivery_stats.columns:
+        delivery_stats = delivery_stats.sort_values('completion_percentage_mean', ascending=False)
+    else:
+        # Fallback to count if mean is not available
+        delivery_stats = delivery_stats.sort_values('completion_percentage_count', ascending=False)
+    
+    # Take top 10 deliveries for readability
+    delivery_stats = delivery_stats.head(10)
+    
+    # Create a horizontal bar chart showing completion by delivery
+    plt.figure(figsize=(14, 8))
+    
+    # Create the plot
+    ax = plt.subplot(111)
+    
+    # Use delivery as y-axis labels
+    y_pos = np.arange(len(delivery_stats))
+    
+    # Plot the bars with a color gradient based on completion percentage
+    norm = plt.Normalize(0, 100)
+    colors = plt.cm.RdYlGn(norm(delivery_stats['completion_percentage_mean']))
+    
+    bars = ax.barh(y_pos, delivery_stats['completion_percentage_mean'], height=0.5, color=colors)
+    
+    # Add completion percentage labels on bars
+    for i, (_, row) in enumerate(delivery_stats.iterrows()):
+        # Format percentage with 1 decimal place
+        percentage = row['completion_percentage_mean']
+        ax.text(percentage + 2, y_pos[i], f"{percentage:.1f}%", 
+               va='center', fontsize=10, fontweight='bold')
+        
+        # Add material count below the bar
+        material_count = row['completion_percentage_count']
+        
+        # Check if we have quantity columns
+        if 'scanned_qty' in row and 'delivery_qty' in row:
+            scanned = row['scanned_qty']
+            total = row['delivery_qty']
+            label_text = f"{int(scanned)} of {int(total)} units ({material_count} materials)"
+        else:
+            # Just show the material count if we don't have quantities
+            label_text = f"{material_count} materials"
+        
+        ax.text(percentage / 2, y_pos[i] - 0.25,
+               label_text, 
+               ha='center', va='center', fontsize=9, color='#333333',
+               bbox=dict(facecolor='white', alpha=0.7, boxstyle='round,pad=0.2'))
+    
+    # Set custom y-tick labels with delivery numbers
+    plt.yticks(y_pos, delivery_stats['delivery_clean'])
+    
+    # Set labels and title
+    plt.title('Material Completion by Delivery', fontsize=16, fontweight='bold')
+    plt.xlabel('Completion Percentage', fontsize=12)
+    plt.ylabel('Delivery', fontsize=12)
+    
+    # Set x-axis limit to ensure all labels are visible
+    plt.xlim(0, 105)
+    
+    # Add gridlines for better readability
+    plt.grid(axis='x', linestyle='--', alpha=0.7)
+    
+    # Add a colorbar to show the completion scale
+    sm = plt.cm.ScalarMappable(cmap=plt.cm.RdYlGn, norm=norm)
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=ax)
+    cbar.set_label('Completion Percentage')
+    
+    plt.tight_layout()
+    plt.savefig(viz_dir / 'material_completion.png', dpi=120)
+    plt.close()
+    
+    print(f"Material completion visualization saved to {viz_dir.absolute()}")
+
 def create_delivery_time_visualization(df, df_time=None):
     """
     Create visualization showing time since last scan for breakdown by delivery.
@@ -668,9 +800,10 @@ def main():
     """Main function to read data and create visualizations."""
     print("Visualizing shipment tracker results...")
     
-    # Read main output data and time metrics data
+    # Read main output data, time metrics data, and material completion data
     df = read_latest_output()
     df_time = read_latest_time_metrics()
+    df_material = read_latest_material_completion()
     
     # Create visualizations
     create_visualizations(df)
@@ -679,6 +812,9 @@ def main():
     
     # Create time metrics visualizations
     create_time_metrics_visualizations(df_time)
+    
+    # Create material completion visualization
+    create_material_completion_visualization(df_material)
     
     print("Visualization complete.")
 
