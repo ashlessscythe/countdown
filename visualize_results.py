@@ -213,7 +213,7 @@ def create_time_metrics_visualizations(df_time):
 def create_delivery_completion_visualization(df):
     """
     Create visualization showing delivery completion by package count.
-    Shows deliveries with most recent activity and displays raw counts (e.g., "30 of 45 packages scanned").
+    Shows deliveries with most recent activity and displays raw counts.
     
     Args:
         df (DataFrame): DataFrame containing the aggregated shipment data
@@ -235,45 +235,23 @@ def create_delivery_completion_visualization(df):
         print("Warning: is_ash_user flag not found in data. Using all users.")
         df_ash_users = df
     
-    # Check if last_scan_time is available in the dataframe
-    has_time_data = 'last_scan_time' in df_ash_users.columns
+    # Check if count_type is available in the dataframe
+    has_count_type = 'count_type' in df_ash_users.columns
     
-    # Check if we have material-level data
-    has_material_data = 'material_number' in df_ash_users.columns and 'qty' in df_ash_users.columns
+    # Prepare aggregation dictionary for delivery data
+    agg_dict = {
+        'scanned_packages': 'sum',
+        'delivery_total_packages': 'first',
+        'user': lambda x: list(set(x)),  # Get unique users for each delivery
+        'overall_pick_status': 'first'  # Get the overall pick status for each delivery
+    }
     
-    if has_material_data:
-        print("Using material-level data for delivery completion visualization")
-        
-        # First, calculate the total scanned quantity for each delivery
-        # Group by delivery and sum the quantities
-        delivery_qty_data = df_ash_users.groupby('delivery')['scanned_packages'].sum().reset_index()
-        
-        # Then, get the total expected quantity for each delivery (just take the first value)
-        delivery_total_data = df_ash_users.groupby('delivery')['delivery_total_packages'].first().reset_index()
-        
-        # Merge the two dataframes
-        delivery_data = delivery_qty_data.merge(delivery_total_data, on='delivery', how='left')
-        
-        # Add last_scan_time if it exists
-        if has_time_data:
-            last_scan_data = df_ash_users.groupby('delivery')['last_scan_time'].max().reset_index()
-            delivery_data = delivery_data.merge(last_scan_data, on='delivery', how='left')
-    else:
-        print("Using package-level data for delivery completion visualization")
-        
-        # Prepare aggregation dictionary based on available columns
-        agg_dict = {
-            'scanned_packages': 'sum',
-            'delivery_total_packages': 'first',
-            'overall_pick_status': 'first'  # Get the overall pick status for each delivery
-        }
-        
-        # Add last_scan_time to aggregation if it exists
-        if has_time_data:
-            agg_dict['last_scan_time'] = 'max'
-        
-        # Aggregate data by delivery to get total scanned packages and total packages
-        delivery_data = df_ash_users.groupby('delivery').agg(agg_dict).reset_index()
+    # Add count_type to aggregation if available
+    if has_count_type:
+        agg_dict['count_type'] = 'first'
+    
+    # Aggregate data by delivery
+    delivery_data = df_ash_users.groupby('delivery').agg(agg_dict).reset_index()
     
     # Filter out rows with missing delivery_total_packages
     delivery_data = delivery_data.dropna(subset=['delivery_total_packages'])
@@ -291,76 +269,11 @@ def create_delivery_completion_visualization(df):
     delivery_data['completion_percentage'] = (delivery_data['scanned_packages'] / 
                                              delivery_data['delivery_total_packages'] * 100)
     
-    # Check for cases where scanned_packages > delivery_total_packages
-    # This could happen if we're counting serials instead of actual quantities
-    problem_cases = delivery_data[
-        (delivery_data['scanned_packages'] > delivery_data['delivery_total_packages']) | 
-        # Problem cases should also be where scanned is fewer than delivery_total_packages and overall_pick_status is "C"
-        ((delivery_data['scanned_packages'] < delivery_data['delivery_total_packages']) & 
-         (delivery_data['overall_pick_status'] == 'C'))
-    ]
-    
-    # Also check for cases where completion_percentage is 100% or very close to it
-    # This indicates all materials have been scanned
-    complete_cases = delivery_data[delivery_data['completion_percentage'] >= 99.5]
-    
-    if not problem_cases.empty or not complete_cases.empty:
-        if not problem_cases.empty:
-            print(f"Found {len(problem_cases)} cases where scanned_packages > delivery_total_packages in time visualization")
-        if not complete_cases.empty:
-            print(f"Found {len(complete_cases)} cases where all materials have been scanned")
-        print("Adjusting visualization to show 'X of Y' correctly...")
-        
-        # For problem cases, we'll adjust the display values to show the correct relationship
-        # We'll use the delivery_total_packages as the denominator and adjust the numerator
-        # to maintain the same percentage
-        for idx in problem_cases.index:
-            scanned = delivery_data.at[idx, 'scanned_packages']
-            total = delivery_data.at[idx, 'delivery_total_packages']
-            
-            # Calculate what percentage of the total has been scanned
-            if total > 0:
-                percentage = min(100, (scanned / total) * 100)
-                
-                # Calculate a new scanned value that maintains the same percentage
-                # but is less than or equal to the total
-                new_scanned = int(round((percentage / 100) * total))
-                
-                # Ensure new_scanned is never greater than total
-                new_scanned = min(new_scanned, total)
-                
-                # Set the display values
-                delivery_data.at[idx, 'display_scanned'] = new_scanned
-                delivery_data.at[idx, 'display_total'] = total
-            else:
-                # If total is 0, set both to 0 to avoid division by zero
-                delivery_data.at[idx, 'display_scanned'] = 0
-                delivery_data.at[idx, 'display_total'] = 0
-        
-        # For complete cases, set display_scanned to match display_total
-        for idx in complete_cases.index:
-            total = delivery_data.at[idx, 'delivery_total_packages']
-            delivery_data.at[idx, 'display_scanned'] = total
-            
-    
-    # Sort by most recent activity if time data is available, otherwise by completion percentage
-    if has_time_data:
-        delivery_data = delivery_data.sort_values('last_scan_time', ascending=False)
-    else:
-        # Calculate completion percentage for sorting
-        delivery_data['completion_percentage'] = (delivery_data['scanned_packages'] / 
-                                                delivery_data['delivery_total_packages'] * 100)
-        delivery_data = delivery_data.sort_values('completion_percentage', ascending=False)
-    
-    # Take top 10 deliveries for readability (reduced from 15)
-    delivery_data = delivery_data.head(10)
-    
-    # Calculate completion percentage for all deliveries
-    delivery_data['completion_percentage'] = (delivery_data['scanned_packages'] / 
-                                             delivery_data['delivery_total_packages'] * 100)
-    
     # Sort by completion percentage for better visualization (descending order)
     delivery_data = delivery_data.sort_values('completion_percentage', ascending=False)
+    
+    # Take top 10 deliveries for readability
+    delivery_data = delivery_data.head(10)
     
     # Create a more readable horizontal bar chart
     plt.figure(figsize=(14, 8))  # Wider figure for better readability
@@ -378,7 +291,7 @@ def create_delivery_completion_visualization(df):
     bars = ax.barh(y_pos, delivery_data['scanned_packages'], 
                   height=0.5,  # Reduced height for better spacing
                   color='#4CAF50',  # Green color for better visibility
-                  label='Scanned Packages')
+                  label='Scanned Items')
     
     # Add total package count as a line or marker
     for i, (_, row) in enumerate(delivery_data.iterrows()):
@@ -390,14 +303,20 @@ def create_delivery_completion_visualization(df):
         ax.plot(row['delivery_total_packages'], y_pos[i], 
                'ro', alpha=0.8, markersize=8)
     
-    # Add text labels showing "X of Y packages" with better positioning
+    # Add text labels showing "X of Y" with appropriate wording
     for i, (_, row) in enumerate(delivery_data.iterrows()):
         # Position text at the end of the bar or at a minimum position for visibility
         text_x_pos = max(row['scanned_packages'] + (max_packages * 0.02), max_packages * 0.3)
         
-        # Format text with bold for scanned packages
+        # Determine the appropriate wording based on count_type
+        if has_count_type and row['count_type'] == 'serial':
+            item_type = 'serials'
+        else:
+            item_type = 'materials'
+        
+        # Format text with bold for scanned items
         ax.text(text_x_pos, y_pos[i], 
-               f"{int(row['display_scanned'])} of {int(row['display_total'])} packages", 
+               f"{int(row['display_scanned'])} of {int(row['display_total'])} {item_type}", 
                va='center', fontsize=10, fontweight='bold')
         
         # Add percentage in parentheses
@@ -413,8 +332,8 @@ def create_delivery_completion_visualization(df):
     plt.xlim(0, max_packages)
     
     # Set labels and title with improved styling
-    plt.title('Delivery Completion by Package Count', fontsize=16, fontweight='bold')
-    plt.xlabel('Number of Packages', fontsize=12)
+    plt.title('Delivery Completion Status', fontsize=16, fontweight='bold')
+    plt.xlabel('Number of Items', fontsize=12)
     plt.ylabel('Delivery Number', fontsize=12)
     
     # Add gridlines for better readability
@@ -427,7 +346,7 @@ def create_delivery_completion_visualization(df):
         Line2D([0], [0], color='black', alpha=0.5, linewidth=2),
         Line2D([0], [0], marker='o', color='red', alpha=0.8, markersize=8, linestyle='None')
     ]
-    ax.legend(custom_lines, ['Scanned Packages', 'Total Packages', 'Target'], 
+    ax.legend(custom_lines, ['Scanned Items', 'Total Items', 'Target'], 
              loc='upper right', frameon=True, framealpha=0.9)
     
     plt.tight_layout()

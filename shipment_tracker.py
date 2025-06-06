@@ -12,12 +12,17 @@ The tool:
 4. Calculates time metrics for user activity
 5. Outputs the aggregated data in Parquet format
 6. Retains only the last 5 output files
+
+Command line options:
+    --run-once    Run the process once and exit
+    --no-wait     Disable the 10-second wait before visualization
 """
 
 import os
 import time
 import logging
 import re
+import argparse
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -648,19 +653,16 @@ def process_snapshot():
         agg = agg.drop('delivery_clean', axis=1)
     
     # 6. Calculate progress metrics
-    # For progress calculation, consider ASH (assigned to shipper) as "picked"
+    # For progress calculation, consider both ASH and SHP as "scanned"
     # If all items are shipped, progress should be 100%
     
-    # Initialize scanned_packages with assigned to shipper count
-    agg['scanned_packages'] = agg['assigned to shipper_count']
+    # Initialize scanned_packages with sum of ASH and SHP counts
+    agg['scanned_packages'] = agg['assigned to shipper_count'] + agg['shipped_count']
     
     # Calculate progress percentage
     # Only calculate where delivery_total_packages is not null
     agg['progress_percentage'] = 0.0  # Default to 0
     mask = ~agg['delivery_total_packages'].isna()
-    
-    # Check if scanned packages exceed delivery total packages for each delivery
-    # If so, we need to compare counts and use the appropriate denominator
     
     # Check for original or sanitized column names for qty and material
     qty_col = next((col for col in df_serial.columns if col in ['qty', 'Qty']), None)
@@ -843,7 +845,7 @@ def process_snapshot():
                 # Calculate progress based on status and qty
                 if total_qty > 0:
                     # If we have both ASH and SHP, calculate percentage based on both
-                    progress = ((ash_qty + shipped_qty) / total_qty) * 100
+                    progress = min(100, ((ash_qty + shipped_qty) / total_qty) * 100)
                     agg.at[idx, 'progress_percentage'] = progress
             else:
                 # Fallback to count-based calculation if qty column not available
@@ -859,7 +861,7 @@ def process_snapshot():
                 # Calculate progress based on status
                 if total_scanned > 0:
                     # If we have both ASH and SHP, calculate percentage based on both
-                    progress = ((ash_count + shipped_count) / total_scanned) * 100
+                    progress = min(100, ((ash_count + shipped_count) / total_scanned) * 100)
                     agg.at[idx, 'progress_percentage'] = progress
     
     # If all items are shipped, set progress to 100%
@@ -898,6 +900,12 @@ def process_snapshot():
         # Calculate time metrics using the original dataframe
         df_serial_ash_users = df_serial_original[df_serial_original['Created by'].isin(ash_users_original)]
         time_metrics_df = calculate_time_metrics(df_serial_ash_users, reference_time)
+        
+        # Add median time between scans for better outlier handling
+        if not time_metrics_df.empty:
+            time_metrics_df['median_time_between_scans_minutes'] = time_metrics_df['time_diff_list'].apply(
+                lambda x: np.median(x) / 60 if x else 0
+            ).round(2)
         
         logging.info(f"Calculated time metrics using original dataframe with {len(df_serial_original)} records")
         logging.info(f"Time metrics calculated for {len(time_metrics_df)} users")
@@ -942,92 +950,162 @@ def process_snapshot():
         if all([qty_col, material_col, delivery_col, status_col]):
             logging.info("Generating material completion data for visualization")
             
-            # Filter serial data to only include ASH status
+            # First, check serial counts against package counts
+            serial_counts = {}
+            package_counts = {}
+            
+            # Get serial counts (ASH status only)
             df_serial_ash = df_serial[df_serial[status_col] == 'ASH']
+            df_serial_ash['delivery_clean'] = df_serial_ash[delivery_col].apply(sanitize_delivery_number)
             
-            # Group by material and sum the quantities for ASH status
-            material_ash_qty = df_serial_ash.groupby([material_col, delivery_col])[qty_col].sum().reset_index()
+            # Count unique serials per delivery
+            serial_counts = df_serial_ash.groupby('delivery_clean').size().to_dict()
             
-            # Sanitize delivery numbers for consistent format
-            material_ash_qty['delivery_clean'] = material_ash_qty[delivery_col].apply(sanitize_delivery_number)
+            # Get package counts from delivery data
+            if all([delivery_col_delivery, packages_col]):
+                df_delivery['delivery_clean'] = df_delivery[delivery_col_delivery].apply(sanitize_delivery_number)
+                package_counts = df_delivery.groupby('delivery_clean')[packages_col].sum().to_dict()
             
-            # Check if we have all required columns for delivery data
+            # Find common deliveries
+            common_deliveries = set(serial_counts.keys()) & set(package_counts.keys())
+            logging.info(f"Found {len(common_deliveries)} common deliveries for serial vs package comparison")
+            
+            # Check if serial counts make sense compared to package counts
+            serial_package_matches = []
+            for delivery in common_deliveries:
+                serial_count = serial_counts[delivery]
+                package_count = package_counts[delivery]
+                
+                # If serial count is close to or exceeds package count, use serial count
+                if serial_count >= package_count * 0.9:  # Allow 10% margin
+                    serial_package_matches.append({
+                        'delivery': delivery,
+                        'count_type': 'serial',
+                        'count': serial_count,
+                        'package_count': package_count
+                    })
+                else:
+                    # If counts don't match, we'll use material-level completion
+                    serial_package_matches.append({
+                        'delivery': delivery,
+                        'count_type': 'material',
+                        'count': serial_count,
+                        'package_count': package_count
+                    })
+            
+            # Convert to DataFrame for analysis
+            serial_package_df = pd.DataFrame(serial_package_matches)
+            logging.info(f"Serial counts used for {len(serial_package_df[serial_package_df['count_type'] == 'serial'])} deliveries")
+            logging.info(f"Material completion used for {len(serial_package_df[serial_package_df['count_type'] == 'material'])} deliveries")
+            
+            # Now proceed with material completion for deliveries where serial counts don't make sense
+            material_deliveries = serial_package_df[serial_package_df['count_type'] == 'material']['delivery'].tolist()
+            
+            # Create a mapping of delivery to material quantities from delivery data
+            delivery_material_qty = {}
+            
+            # Group by delivery and material in delivery data
             if all([delivery_col_delivery, delivery_material_col, delivery_qty_col]):
                 # Sanitize delivery numbers in delivery data
                 df_delivery['delivery_clean'] = df_delivery[delivery_col_delivery].apply(sanitize_delivery_number)
                 
-                # Group by material and sum the delivery quantities
-                material_delivery_qty = df_delivery.groupby([delivery_material_col, 'delivery_clean'])[delivery_qty_col].sum().reset_index()
+                # Filter for material-level deliveries only
+                df_delivery_material = df_delivery[df_delivery['delivery_clean'].isin(material_deliveries)]
                 
-                # Convert material columns to string for consistent comparison
-                material_ash_qty[material_col] = material_ash_qty[material_col].astype(str)
-                material_delivery_qty[delivery_material_col] = material_delivery_qty[delivery_material_col].astype(str)
+                # Group by material and delivery, sum the quantities
+                material_delivery_qty = df_delivery_material.groupby([delivery_material_col, 'delivery_clean'])[delivery_qty_col].sum().reset_index()
                 
-                # Create a mapping of delivery to materials for both dataframes
-                delivery_to_materials_ash = {}
-                for _, row in material_ash_qty.iterrows():
-                    delivery = row['delivery_clean']
-                    material = str(row[material_col]).split('.')[0]  # Remove decimal part
-                    qty = row[qty_col]
-                    
-                    if delivery not in delivery_to_materials_ash:
-                        delivery_to_materials_ash[delivery] = {}
-                    
-                    delivery_to_materials_ash[delivery][material] = qty
-                
-                delivery_to_materials_delivery = {}
+                # Store in dictionary for easy lookup
                 for _, row in material_delivery_qty.iterrows():
                     delivery = row['delivery_clean']
                     material = str(row[delivery_material_col]).split('.')[0]  # Remove decimal part
                     qty = row[delivery_qty_col]
                     
-                    if delivery not in delivery_to_materials_delivery:
-                        delivery_to_materials_delivery[delivery] = {}
+                    if delivery not in delivery_material_qty:
+                        delivery_material_qty[delivery] = {}
                     
-                    delivery_to_materials_delivery[delivery][material] = qty
+                    delivery_material_qty[delivery][material] = qty
                 
-                # Find common deliveries
-                common_deliveries = set(delivery_to_materials_ash.keys()) & set(delivery_to_materials_delivery.keys())
-                logging.info(f"Found {len(common_deliveries)} common deliveries for material completion")
+                logging.info(f"Processed delivery quantities for {len(delivery_material_qty)} deliveries")
+            
+            # Process serial data to get ASH quantities for material-level deliveries
+            serial_material_qty = {}
+            
+            # Filter serial data for material-level deliveries
+            df_serial_material = df_serial_ash[df_serial_ash['delivery_clean'].isin(material_deliveries)]
+            
+            # Group by delivery, material and sum quantities
+            serial_grouped = df_serial_material.groupby(['delivery_clean', material_col])[qty_col].sum().reset_index()
+            
+            # Store in dictionary for easy lookup
+            for _, row in serial_grouped.iterrows():
+                delivery = row['delivery_clean']
+                material = str(row[material_col]).split('.')[0]  # Remove decimal part
+                qty = row[qty_col]
                 
-                # For each common delivery, find matching materials
-                material_matches = []
+                if delivery not in serial_material_qty:
+                    serial_material_qty[delivery] = {}
                 
-                for delivery in common_deliveries:
-                    ash_materials = delivery_to_materials_ash[delivery]
-                    delivery_materials = delivery_to_materials_delivery[delivery]
+                serial_material_qty[delivery][material] = qty
+            
+            logging.info(f"Processed serial quantities for {len(serial_material_qty)} deliveries")
+            
+            # For each delivery, match materials and calculate completion
+            material_matches = []
+            
+            for delivery in material_deliveries:
+                if delivery in delivery_material_qty and delivery in serial_material_qty:
+                    delivery_materials = delivery_material_qty[delivery]
+                    serial_materials = serial_material_qty[delivery]
                     
                     # Try to match materials by checking if one is a substring of the other
-                    for ash_material, ash_qty in ash_materials.items():
-                        for delivery_material, delivery_qty in delivery_materials.items():
+                    for delivery_material, delivery_qty in delivery_materials.items():
+                        for serial_material, serial_qty in serial_materials.items():
                             # Check if the material numbers are similar (one is a substring of the other)
-                            if ash_material in delivery_material or delivery_material in ash_material:
+                            if delivery_material in serial_material or serial_material in delivery_material:
                                 material_matches.append({
-                                    'delivery_clean': delivery,
-                                    'material_ash': ash_material,
-                                    'material_delivery': delivery_material,
-                                    'scanned_qty': ash_qty,
-                                    'delivery_qty': delivery_qty
+                                    'delivery': delivery,
+                                    'material': delivery_material,
+                                    'expected_qty': delivery_qty,
+                                    'scanned_qty': serial_qty,
+                                    'count_type': 'material'
                                 })
+            
+            # Add serial-level completions
+            for delivery in serial_package_df[serial_package_df['count_type'] == 'serial']['delivery']:
+                material_matches.append({
+                    'delivery': delivery,
+                    'material': 'ALL',
+                    'expected_qty': package_counts[delivery],
+                    'scanned_qty': serial_counts[delivery],
+                    'count_type': 'serial'
+                })
+            
+            # Convert to DataFrame
+            if material_matches:
+                material_completion_df = pd.DataFrame(material_matches)
                 
-                # Convert to DataFrame
-                if material_matches:
-                    material_completion_df = pd.DataFrame(material_matches)
-                    
-                    # Calculate completion percentage
-                    material_completion_df['completion_percentage'] = (
-                        material_completion_df['scanned_qty'] / material_completion_df['delivery_qty'] * 100
-                    ).clip(0, 100)  # Clip to 0-100% range
-                    
-                    logging.info(f"Generated material completion data with {len(material_completion_df)} records")
-                else:
-                    logging.warning("No matching materials found for material completion visualization")
+                # Calculate completion percentage with validation for negative quantities
+                material_completion_df['completion_percentage'] = np.where(
+                    material_completion_df['expected_qty'] > 0,
+                    (material_completion_df['scanned_qty'] / material_completion_df['expected_qty'] * 100).clip(0, 100),
+                    0
+                )
+                
+                # Add additional metrics
+                material_completion_df['remaining_qty'] = material_completion_df['expected_qty'] - material_completion_df['scanned_qty']
+                material_completion_df['remaining_qty'] = material_completion_df['remaining_qty'].clip(lower=0)  # Ensure non-negative
+                
+                logging.info(f"Generated completion data with {len(material_completion_df)} records")
+                logging.info(f"Average completion percentage: {material_completion_df['completion_percentage'].mean():.2f}%")
+                logging.info(f"Serial-level completions: {len(material_completion_df[material_completion_df['count_type'] == 'serial'])}")
+                logging.info(f"Material-level completions: {len(material_completion_df[material_completion_df['count_type'] == 'material'])}")
             else:
-                logging.warning("Missing required columns in delivery data for material completion")
+                logging.warning("No matching materials found for completion visualization")
         else:
-            logging.warning("Missing required columns in serial data for material completion")
+            logging.warning("Missing required columns for completion calculation")
     except Exception as e:
-        logging.error(f"Error generating material completion data: {e}")
+        logging.error(f"Error generating completion data: {e}")
     
     # 11. Write new output if changes detected
     if changed:
@@ -1086,9 +1164,15 @@ def cleanup_old_files(directory, pattern, keep_count):
 
 def main():
     """
-    Main function to run the shipment tracking process at regular intervals.
-    Also runs visualization after a short delay.
+    Main function to run the shipment tracking process.
+    Handles command line arguments for run-once and no-wait options.
     """
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Shipment Tracking Tool')
+    parser.add_argument('--run-once', action='store_true', help='Run the process once and exit')
+    parser.add_argument('--no-wait', action='store_true', help='Disable the 10-second wait before visualization')
+    args = parser.parse_args()
+
     # Configure logging
     logging.basicConfig(
         level=logging.INFO,
@@ -1101,16 +1185,17 @@ def main():
     
     logging.info("Starting shipment tracking service...")
     
-    # Run the process in a loop
+    # Run the process in a loop or once based on arguments
     while True:
         try:
             process_snapshot()
         except Exception as e:
             logging.exception("Unexpected error in processing cycle")
         
-        # Wait 10 seconds before running visualization
-        logging.info("Waiting 10 seconds before running visualization...")
-        time.sleep(10)
+        # Wait before visualization if not disabled
+        if not args.no_wait:
+            logging.info("Waiting 10 seconds before running visualization...")
+            time.sleep(10)
         
         # Run visualization if enabled (default: True)
         run_visualization = getattr(config, 'RUN_VISUALIZATION', True)
@@ -1126,8 +1211,13 @@ def main():
         else:
             logging.info("Visualization disabled in config")
         
+        # Exit if run-once is specified
+        if args.run_once:
+            logging.info("Run-once specified, exiting...")
+            break
+        
         # Calculate remaining sleep time
-        remaining_sleep = config.INTERVAL_SECONDS - 10
+        remaining_sleep = config.INTERVAL_SECONDS - (0 if args.no_wait else 10)
         if remaining_sleep > 0:
             logging.info(f"Sleeping for remaining {remaining_sleep} seconds...")
             time.sleep(remaining_sleep)
